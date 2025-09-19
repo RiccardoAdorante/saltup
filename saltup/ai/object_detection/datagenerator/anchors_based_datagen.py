@@ -449,15 +449,15 @@ class KerasAnchorBasedDatagen(AnchorsBasedDatagen, Sequence):
 
         # If an extra outer batching dimension is present (e.g. (outer_batch, inner_batch, H, W, C)),
         # merge the first two dimensions to produce a single batch dimension.
-        if images.ndim == 5:
-            print("Warning: Merging outer and inner batch dimensions for Keras compatibility.")
-            outer, inner = images.shape[0], images.shape[1]
-            images = images.reshape((outer * inner,) + images.shape[2:])
-            labels = labels.reshape((outer * inner,) + labels.shape[2:])
+        # if images.ndim == 5:
+        #     print("Warning: Merging outer and inner batch dimensions for Keras compatibility.")
+        #     outer, inner = images.shape[0], images.shape[1]
+        #     images = images.reshape((outer * inner,) + images.shape[2:])
+        #     labels = labels.reshape((outer * inner,) + labels.shape[2:])
 
         # If using a torch backend with channels-last numpy arrays (B,H,W,C) convert to (B,C,H,W)
-        if keras.backend.backend() == "torch":
-            images = images.transpose(0, 3, 1, 2)  # (B,H,W,C) -> (B,C,H,W)
+        # if keras.backend.backend() == "torch":
+        #     images = images.transpose(0, 3, 1, 2)  # (B,H,W,C) -> (B,C,H,W)
 
 
         # print(images.shape, labels.shape)
