@@ -1,5 +1,6 @@
 import pytest
 import os
+os.environ["SALTUP_BACKEND"] = "keras_tensorflow"
 import numpy as np
 import torch
 import torch.nn as nn

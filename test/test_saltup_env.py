@@ -1,5 +1,6 @@
 import pytest
 import os
+os.environ["SALTUP_BACKEND"] = "keras_tensorflow"
 import json
 import tempfile
 from unittest.mock import patch, mock_open

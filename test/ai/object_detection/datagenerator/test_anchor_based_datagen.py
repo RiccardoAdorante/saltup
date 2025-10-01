@@ -1,5 +1,6 @@
 import pytest
 import os
+os.environ["SALTUP_BACKEND"] = "keras_tensorflow"
 import yaml
 from dotmap import DotMap
 import math

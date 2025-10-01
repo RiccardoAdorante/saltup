@@ -1,5 +1,7 @@
 import pytest
 import numpy as np
+import os
+os.environ["SALTUP_BACKEND"] = "keras_tensorflow"
 from saltup.utils.data.image.image_utils import Image, ColorMode
 from saltup.ai.classification.dataloader import ClassificationDataloader
 import cv2

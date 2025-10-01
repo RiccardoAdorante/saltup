@@ -123,14 +123,15 @@ def _train_model(
         return best_model_path
 
     elif isinstance(model, torch.nn.Module):
-        
+        if optimizer is None or loss_function is None:
+            raise ValueError("both `loss_function` and `optimizer` must be provided")
         # Get PyTorch training configuration
         pytorch_config = SaltupEnv.SALTUP_TRAINING_PYTORCH_ARGS
         
         context = CallbackContext(
             model=model,
             epochs=epochs,
-            batch_size=train_gen.dataset.batch_size,
+            batch_size=train_gen.dataset.batch_size if SaltupEnv.SALTUP_BACKEND == BackendType.TORCH else train_gen.batch_size,
             best_model=None,
             best_epoch=1,
             best_loss=None,

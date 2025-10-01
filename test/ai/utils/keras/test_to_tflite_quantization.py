@@ -1,4 +1,5 @@
 import os
+os.environ["SALTUP_BACKEND"] = "keras_tensorflow"
 import numpy as np
 import tensorflow as tf
 import keras

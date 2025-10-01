@@ -1,5 +1,6 @@
 import pytest
 import os
+os.environ["SALTUP_BACKEND"] = "torch"
 import numpy as np
 from PIL import Image
 from unittest.mock import Mock, patch, MagicMock, PropertyMock
@@ -178,7 +179,7 @@ class TestTrainModel:
             
             # Assertions
             assert os.path.exists(trained_model_path)
-            assert trained_model_path.endswith(".pt")
+            assert trained_model_path.endswith(".pth")
             assert os.path.exists(os.path.join(output_dir, "saved_models"))
         
     def test_train_model_keras_missing_optimizer(self, mock_keras_model, mock_keras_data_generator, tmp_path):
