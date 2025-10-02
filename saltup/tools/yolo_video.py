@@ -13,7 +13,6 @@ import signal
 import sys
 import json
 import os
-os.environ["SALTUP_BACKEND"] = "keras_tensorflow"  # Example backend setting
 
 from saltup.ai.object_detection.yolo.yolo_type import YoloType
 from saltup.ai.object_detection.yolo.yolo_factory import YoloFactory
