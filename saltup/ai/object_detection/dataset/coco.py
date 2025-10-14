@@ -313,8 +313,14 @@ class COCOS3Loader(BaseDataloader, S3):
         else:
             # Handle single index
             return self._load_item(idx)
-    
-    def _load_item(self, idx: int) -> Tuple[Image, List[BBoxClassId]]:
+        
+    def get_list_labels(self) -> List[int]:
+        """Get list of all class labels in the dataset."""
+        image_path, bboxes = self.image_annotation_pairs
+        class_ids = set(bbox.class_id for bbox in bboxes)
+        return sorted(class_ids)
+
+    def _load_item(self, idx: int) -> Tuple[str, List[BBoxClassId]]:
         """Load single item by index.
         
         A differenza di YOLO e Pascal VOC, non necessitiamo di caricare e parsare
