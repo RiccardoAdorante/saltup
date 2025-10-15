@@ -157,6 +157,29 @@ class BBoxFormat(IntEnum):
             return "PASCAL VOC (absolute x1, y1, x2, y2)"
         else:
             raise ValueError(f"Unknown BBoxFormat: {self}")
+    def from_string(cls, s: str):
+        """Convert a human-readable string to a BBoxFormat enum."""
+        s = s.lower()
+        if s in ["corners normalized", "corners_normalized", "x1y1x2y2 normalized", "x1y1x2y2_normalized"]:
+            return cls.CORNERS_NORMALIZED
+        elif s in ["center normalized", "center_normalized", "xywh normalized", "xywh_normalized"]:
+            return cls.CENTER_NORMALIZED
+        elif s in ["topleft normalized", "topleft_normalized", "xywh normalized", "xywh_normalized"]:
+            return cls.TOPLEFT_NORMALIZED
+        elif s in ["corners absolute", "corners_absolute", "x1y1x2y2 absolute", "x1y1x2y2_absolute"]:
+            return cls.CORNERS_ABSOLUTE
+        elif s in ["center absolute", "center_absolute", "xywh absolute", "xywh_absolute"]:
+            return cls.CENTER_ABSOLUTE
+        elif s in ["topleft absolute", "topleft_absolute", "xywh absolute", "xywh_absolute"]:
+            return cls.TOPLEFT_ABSOLUTE
+        elif s == "yolo":
+            return cls.YOLO
+        elif s == "coco":
+            return cls.COCO
+        elif s in ["voc", "pascal voc", "pascal_voc"]:
+            return cls.VOC
+        else:
+            raise ValueError(f"Unknown BBoxFormat string: {s}")
         
 BBOX_INNER_FORMAT = BBoxFormat(SaltupEnv.SALTUP_BBOX_INNER_FORMAT)
 FLOAT_PRECISION = SaltupEnv.SALTUP_BBOX_FLOAT_PRECISION
@@ -1071,6 +1094,22 @@ class BBox:
         # using their own internal image dimensions
         return BBox._compute_iou(self, other, BBoxFormat.CORNERS_ABSOLUTE, None, iou_type)
     
+    def to_json(self, fmt: BBoxFormat = BBOX_INNER_FORMAT) -> dict:
+        return {
+            "coordinates": self.get_coordinates(fmt),
+            "fmt": fmt.to_string(),
+            "img_height": self.img_height,
+            "img_width": self.img_width
+        }
+        
+    def from_json(cls, data):
+        return cls(
+            coordinates = data["coordinates"],
+            fmt = BBoxFormat.from_string(data["fmt"]),
+            img_height = data["img_height"],
+            img_width = data["img_width"]
+        )
+        
     def __repr__(self):
         return f"BBox(coordinates={self.get_coordinates()}, fmt={BBOX_INNER_FORMAT.to_string()}, img_height={self.img_height}, img_width={self.img_width})"
 
@@ -1217,6 +1256,24 @@ class BBoxClassId(BBox):
             coordinates={self.get_coordinates()},
             class_id={self.class_id},
             class_name={self.class_name})"""
+            
+    def to_json(self, fmt: BBoxFormat = BBOX_INNER_FORMAT) -> dict:
+        data = super().to_json(fmt)
+        data.update({
+            "class_id": self.class_id,
+            "class_name": self.class_name
+        })
+        return data
+    
+    def from_json(cls, data):
+        return cls(
+            coordinates = data["coordinates"],
+            class_id = data["class_id"],
+            class_name = data.get("class_name"),
+            fmt = BBoxFormat.from_string(data["fmt"]),
+            img_height = data["img_height"],
+            img_width = data["img_width"]
+        )
 
     # @classmethod
     # def from_yolo_file(cls, file_path: str, img_height: int, img_width: int) -> Tuple[List['BBoxClassId']]:
@@ -1315,6 +1372,23 @@ class BBoxClassIdScore(BBoxClassId):
             class_id={self.class_id},
             class_name={self.class_name},
             score={self.score})"""
+            
+    def to_json(self, fmt: BBoxFormat = BBOX_INNER_FORMAT) -> dict:
+        data = super().to_json(fmt)
+        data.update({
+            "score": self.score
+        })
+        return data
+    def from_json(cls, data):
+        return cls(
+            coordinates = data["coordinates"],
+            class_id = data["class_id"],
+            class_name = data.get("class_name"),
+            score = data["score"],
+            fmt = BBoxFormat.from_string(data["fmt"]),
+            img_height = data["img_height"],
+            img_width = data["img_width"]
+        )
 
 
 def nms(bboxes: List[BBox], scores: List[float], iou_threshold: float, max_boxes: int = None) -> List[BBox]:

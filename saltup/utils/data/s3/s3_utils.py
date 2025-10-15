@@ -170,7 +170,8 @@ class S3:
     def download_files_from_folder(
         self, 
         folder_path: str, 
-        destination_path: str, 
+        destination_path: str,
+        max_files: int = -1,
         patterns: Union[str, Iterable[Union[str, List[str]]]] = None, 
         overwrite: bool = True, 
         retries: int = 3
@@ -181,11 +182,13 @@ class S3:
         Args:
             folder_path (str): The S3 folder path to download files from.
             destination_path (str): The local path to save downloaded files.
+            max_files (int): Maximum number of files to download. If -1, downloads all files. Defaults to -1.
             patterns: Unix-like patterns to filter the files. Defaults to None. 
-                Uses the `saltup.utils.misc.match_patterns()` function to allow for more pattern possibilities.
-            retries (int): Number of retry attempts in case of failure. Defaults to 3.
+            Uses the `saltup.utils.misc.match_patterns()` function to allow for more pattern possibilities.
             overwrite (bool): If True, overwrites existing files. Defaults to True.
+            retries (int): Number of retry attempts in case of failure. Defaults to 3.
         """
+        files_downloaded = 0
         paginator = self._client.get_paginator('list_objects_v2')
         pages = paginator.paginate(Bucket=self._bucket_name, Prefix=folder_path)
 
@@ -194,12 +197,17 @@ class S3:
 
         for page in pages:
             for obj in page.get('Contents', []):
+                if max_files != -1 and files_downloaded >= max_files:
+                    return  # Stop if max_files reached
+
                 file = obj['Key']
                 filename = os.path.basename(file)
                 
                 # Check if the file matches the filter patterns
                 if (not patterns) or match_patterns(filename, patterns):
-                    if not self.download_file(file, destination_path, overwrite=overwrite, retries=retries):
+                    if self.download_file(file, destination_path, overwrite=overwrite, retries=retries):
+                        files_downloaded += 1
+                    else:
                         logging.warning(f"Failed to download {obj['Key']}.")
 
     def download_folder(

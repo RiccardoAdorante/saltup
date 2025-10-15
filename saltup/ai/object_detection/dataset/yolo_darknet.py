@@ -180,10 +180,13 @@ class YoloDarknetS3Loader(BaseDataloader, S3):
         aws_access_key_id:str =None,
         aws_secret_access_key:str =None,
         aws_credential_filepath:str ="~/.aws/credentials",
-        section: str='default',
+        color_mode: ColorMode = ColorMode.RGB,
+        section: str ='default',
         download_file: bool = False,
+        max_files: int = -1,
+        start_date: str = None,
+        end_date: str = None,
         dest_folder_path: str = None,
-        color_mode: ColorMode = ColorMode.RGB
     ):
         """
         Initialize YoloDarknetS3Loader for datasets stored on S3.
@@ -214,6 +217,10 @@ class YoloDarknetS3Loader(BaseDataloader, S3):
         
         self.download_files_from_S3 = download_file
         self.dest_folder_path = dest_folder_path
+        
+        if self.download_files_from_S3:
+            if max_files <= 0:
+                raise ValueError("max_files must be > 0 when download_file is True")
         
         self.__logger = configure_logging.get_logger(__name__)
         self.__logger.info("Initializing YOLO Darknet dataset loader")
@@ -293,18 +300,18 @@ class YoloDarknetS3Loader(BaseDataloader, S3):
         image_path, label_path = self.image_label_pairs[idx]
         if self.download_files_from_S3:
             local_image_path = os.path.join(self.dest_folder_path, os.path.basename(image_path))
-            if not os.path.exists(local_image_path):
-                try:
-                    self.download_file(
-                        file_path=image_path,
-                        destination_path=local_image_path
-                    )
-                    self.logger.info(f"Downloaded {image_path} to {local_image_path}")
-                except ClientError as e:
-                    self.logger.error(f"Failed to download {image_path} from S3: {str(e)}")
-                    raise
+            try:
+                self.download_file(
+                    file_path=image_path,
+                    destination_path=self.dest_folder_path
+                )
+                self.logger.info(f"Downloaded {image_path} to {local_image_path}")
+            except ClientError as e:
+                self.logger.error(f"Failed to download {image_path} from S3: {str(e)}")
+                raise
             image = self.load_image(local_image_path, self.color_mode)
-            image_width, image_height = image.get_width(), image.get_height()   
+            image_width, image_height = image.get_width(), image.get_height()
+            image_path = local_image_path
         
         local_label_path = os.path.join(self.dest_folder_path, os.path.basename(label_path))
         if self.download_files_from_S3 and not os.path.exists(local_label_path):
@@ -328,9 +335,9 @@ class YoloDarknetS3Loader(BaseDataloader, S3):
             img_height=image_height if image_height else None
         ) for lbl in read_label(local_label_path)]
         
-        if self.download_files_from_S3:
-            return image, annotations
-        return image_path, annotations        
+        if not self.download_files_from_S3:
+            image = None
+        return image_path, image, annotations        
 
     def __len__(self):
         """Return total number of samples in dataset."""
@@ -358,41 +365,18 @@ class YoloDarknetS3Loader(BaseDataloader, S3):
         """
         image_label_pairs = []
         skipped_images = 0
+
+        image_list = self.ls(self._images_dir, ['.jpg', '.jpeg', '.png'], only_basename=True)
+        label_list = self.ls(self._labels_dir, ['.txt'], only_basename=True)
         
-        for image_file in os.listdir(self._images_dir):
-            if image_file.endswith(('.jpg', '.jpeg', '.png')):
-                base_name = os.path.splitext(image_file)[0]
-                image_path = str(self._images_dir / image_file)
-                label_path = str(self._labels_dir / f"{base_name}.txt")
-                try:
-                    # Check if the object exists and is reachable in S3
-                    self._client.head_object(Bucket=self._bucket_name, Key=image_path)
-                    image_exists = True 
-                except ClientError as e:
-                # file not found
-                    if e.response['Error']['Code'] == "NoSuchKey":
-                        skipped_images += 1
-                        self.logger.warning(f"S3 image not found: {image_path}")
-                        continue
-                try:
-                    # Check if the object exists and is reachable in S3
-                    self._client.head_object(Bucket=self._bucket_name, Key=label_path)
-                    label_exists = True
-                except ClientError as e:
-                # file not found
-                    if e.response['Error']['Code'] == "NoSuchKey":
-                        skipped_images += 1
-                        self.logger.warning(f"S3 label not found: {label_path}")
-                        continue
-                if image_exists and label_exists:
-                    image_label_pairs.append((image_path, label_path))
-                else:
-                    skipped_images += 1
-                    self.__logger.warning(f"Label not found for {image_file}")
-        
-        if skipped_images > 0:
-            self.__logger.warning(f"Skipped {skipped_images} images due to missing labels")
-            
+        for image_file in image_list:
+            common_name = image_file.split(".")[0]
+            label_name = f"{common_name}.txt"
+            if label_name in label_list:
+                image_label_pairs.append((image_file, label_name))
+            else:
+                self.__logger.warning(f"Label not found for {image_file}")
+                skipped_images += 1
         return image_label_pairs
 
 class YoloDataset(Dataset):

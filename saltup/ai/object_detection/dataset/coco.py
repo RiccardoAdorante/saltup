@@ -222,6 +222,9 @@ class COCOS3Loader(BaseDataloader, S3):
         aws_credential_filepath:str ="~/.aws/credentials",
         section: str='default',
         download_file: bool = False,
+        max_files: int = -1,
+        start_date: str = None,
+        end_date: str = None,
         dest_folder_path: str = None,
         color_mode: ColorMode = ColorMode.RGB
     ):
@@ -254,7 +257,11 @@ class COCOS3Loader(BaseDataloader, S3):
         )
         self.download_files_from_S3 = download_file
         self.dest_folder_path = dest_folder_path
+        self.max_files = max_files
         
+        if self.download_files_from_S3:
+            if max_files <= 0:
+                raise ValueError("max_files must be > 0 when download_file is True")
         self.logger = logging.getLogger(__name__)
         self.logger.info("Initializing COCO dataset loader")
         
@@ -344,23 +351,9 @@ class COCOS3Loader(BaseDataloader, S3):
         if not 0 <= idx < len(self):
             raise IndexError("Index out of range")
             
-        image_path, annotations = self.image_annotation_pairs[idx]
-        
-        if self.download_files_from_S3:
-            local_image_path = os.path.join(self.dest_folder_path, os.path.basename(image_path))
-            if not os.path.exists(local_image_path):
-                try:
-                    self.download_file(
-                        file_path=image_path,
-                        destination_path=local_image_path
-                    )
-                    self.logger.info(f"Downloaded {image_path} to {local_image_path}")
-                except ClientError as e:
-                    self.logger.error(f"Failed to download {image_path} from S3: {str(e)}")
-                    raise
-            image = self.load_image(local_image_path, self.color_mode)
-            return image, annotations
-        return image_path, annotations
+        image_path, image, annotations = self.image_annotation_pairs[idx]
+            
+        return image_path, image, annotations
 
     def _load_annotations(self) -> Dict:
         """Load COCO annotations from JSON file."""
@@ -392,14 +385,10 @@ class COCOS3Loader(BaseDataloader, S3):
         Returns:
             List of tuples containing (image_path, annotations) pairs
         """
-        list_images_path = []
-        list_annotations = []
-        for image_path, annotations in self.image_annotation_pairs:
-            list_images_path.append(image_path)
-            list_annotations.append(annotations)
-        
-        return list_images_path, list_annotations
-    
+        list_images_path, images, list_annotations = zip(*self.image_annotation_pairs)
+
+        return list_images_path, images, list_annotations
+
     def split(self, ratio):
         raise NotImplementedError("Splitting COCO datasets is not implemented yet")
     
@@ -423,12 +412,28 @@ class COCOS3Loader(BaseDataloader, S3):
             image_to_annotations[ann['image_id']].append(ann)
 
         skipped_images = 0
+        files_downloaded = 0
         for img in self.annotations['images']:
             s3_image_path = os.path.join(str(self.image_dir), img['file_name'])
             try:
                 # Check if the object exists and is reachable in S3
                 self._client.head_object(Bucket=self._bucket_name, Key=s3_image_path)
-                image_exists = True 
+                image_exists = True
+                
+                if self.download_files_from_S3 and files_downloaded < self.max_files:
+                    local_image_path = os.path.join(self.dest_folder_path, os.path.basename(s3_image_path))
+                    destination_folder = os.path.join(self.dest_folder_path, "images")
+                    try:
+                        self.download_file(
+                            file_path=s3_image_path,
+                            destination_path=destination_folder
+                        )
+                        self.logger.info(f"Downloaded {s3_image_path} to {local_image_path}")
+                    except ClientError as e:
+                        self.logger.error(f"Failed to download {s3_image_path} from S3: {str(e)}")
+                        raise
+                    image = self.load_image(local_image_path, self.color_mode)
+                    
             except ClientError as e:
                 # file not found
                 if e.response['Error']['Code'] == "NoSuchKey":
@@ -443,8 +448,10 @@ class COCOS3Loader(BaseDataloader, S3):
                     img_width=img['width'],
                     fmt=BBoxFormat.TOPLEFT_ABSOLUTE
                 ) for annotation_raw in image_to_annotations[img['id']]]
+                if not self.download_files_from_S3:
+                    image = None
                 image_annotation_pairs.append(
-                    (s3_image_path, annotations)
+                    (s3_image_path, image, annotations)
                 )
             else:
                 skipped_images += 1
