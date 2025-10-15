@@ -10,7 +10,7 @@ from collections import defaultdict, Counter, OrderedDict
 from typing import Iterable, Union, List, Dict, Optional, Tuple, Set
 
 from saltup.utils.data.image.image_utils import Image
-from saltup.utils.data.s3.s3_utils import S3
+from saltup.utils.data.s3.s3_utils import S3, list_files_by_date
 from botocore.exceptions import ClientError
 from saltup.ai.object_detection.utils.bbox import BBox, BBoxClassId, BBoxFormat
 from saltup.ai.base_dataformat.base_dataloader import BaseDataloader, ColorMode
@@ -217,9 +217,12 @@ class YoloDarknetS3Loader(BaseDataloader, S3):
         
         self.download_files_from_S3 = download_file
         self.dest_folder_path = dest_folder_path
+        self.max_files = max_files
+        self.start_date = start_date
+        self.end_date = end_date
         
         if self.download_files_from_S3:
-            if max_files <= 0:
+            if self.max_files <= 0:
                 raise ValueError("max_files must be > 0 when download_file is True")
         
         self.__logger = configure_logging.get_logger(__name__)
@@ -297,46 +300,8 @@ class YoloDarknetS3Loader(BaseDataloader, S3):
         if not 0 <= idx < len(self):
             raise IndexError("Index out of range")
         
-        image_path, label_path = self.image_label_pairs[idx]
-        if self.download_files_from_S3:
-            local_image_path = os.path.join(self.dest_folder_path, os.path.basename(image_path))
-            try:
-                self.download_file(
-                    file_path=image_path,
-                    destination_path=self.dest_folder_path
-                )
-                self.logger.info(f"Downloaded {image_path} to {local_image_path}")
-            except ClientError as e:
-                self.logger.error(f"Failed to download {image_path} from S3: {str(e)}")
-                raise
-            image = self.load_image(local_image_path, self.color_mode)
-            image_width, image_height = image.get_width(), image.get_height()
-            image_path = local_image_path
+        image_path, image, annotations = self.image_label_pairs[idx]
         
-        local_label_path = os.path.join(self.dest_folder_path, os.path.basename(label_path))
-        if self.download_files_from_S3 and not os.path.exists(local_label_path):
-            try:
-                self.download_file(
-                    file_path=label_path,
-                    destination_path=local_label_path
-                )
-                self.logger.info(f"Downloaded {label_path} to {local_label_path}")
-            except ClientError as e:
-                self.logger.error(f"Failed to download {label_path} from S3: {str(e)}")
-                raise
-        
-        annotations = [BBoxClassId(
-            # (class_id, xc, yc, w, h)
-            coordinates=lbl[1:],
-            class_id=lbl[0],
-            class_name=None,
-            fmt=BBoxFormat.YOLO,
-            img_width=image_width if image_width else None,
-            img_height=image_height if image_height else None
-        ) for lbl in read_label(local_label_path)]
-        
-        if not self.download_files_from_S3:
-            image = None
         return image_path, image, annotations        
 
     def __len__(self):
@@ -355,28 +320,74 @@ class YoloDarknetS3Loader(BaseDataloader, S3):
             YoloDarknetLoader2: Second loader instance
         """
         raise NotImplementedError("Merging not implemented yet")
-    
-    def _load_image_label_pairs(self) -> List[Tuple[str, str]]:
+
+    def _load_image_label_pairs(self) -> List[Tuple[str, Image, List[BBoxClassId]]]:
         """
         Load pairs from images and labels directories.
         
         Returns:
-            List of tuples containing (image_path, label_path) pairs
+            List of tuples containing (image_path, image, annotations) pairs
         """
         image_label_pairs = []
         skipped_images = 0
-
-        image_list = self.ls(self._images_dir, ['.jpg', '.jpeg', '.png'], only_basename=True)
+        downloaded_files = 0
+        image_list = list_files_by_date(self, self._images_dir, self.start_date, self.end_date, ['.jpg', '.jpeg', '.png'], only_basename=True)
         label_list = self.ls(self._labels_dir, ['.txt'], only_basename=True)
-        
+        if len(image_list) > self.max_files:
+            image_list = image_list[:self.max_files]
         for image_file in image_list:
             common_name = image_file.split(".")[0]
             label_name = f"{common_name}.txt"
             if label_name in label_list:
-                image_label_pairs.append((image_file, label_name))
+                self.__logger.info(f"Found label for {image_file}: {label_name}")
             else:
                 self.__logger.warning(f"Label not found for {image_file}")
                 skipped_images += 1
+            
+            if self.download_files_from_S3 and downloaded_files < self.max_files:
+                local_image_path = os.path.join(self.dest_folder_path, image_file)
+                origin_path = os.path.join(self._images_dir, image_file)
+                try:
+                    self.download_file(
+                        file_path=origin_path,
+                        destination_path=self.dest_folder_path
+                    )
+                    self.logger.info(f"Downloaded {image_path} to {local_image_path}")
+                except ClientError as e:
+                    self.logger.error(f"Failed to download {image_path} from S3: {str(e)}")
+                    raise
+                image = self.load_image(local_image_path, self.color_mode)
+                image_width, image_height = image.get_width(), image.get_height()
+                image_path = local_image_path
+            else:
+                image = None
+                image_width, image_height = None, None
+                image_path = os.path.join("s3://", self._bucket_name, self._images_dir, image_file)
+                
+            local_label_path = os.path.join(self.dest_folder_path, label_name)
+            if self.download_files_from_S3 and not os.path.exists(local_label_path):
+                label_path = os.path.join(self._labels_dir, label_name)
+                try:
+                    self.download_file(
+                        file_path=label_path,
+                        destination_path=local_label_path
+                    )
+                    self.logger.info(f"Downloaded {label_path} to {local_label_path}")
+                except ClientError as e:
+                    self.logger.error(f"Failed to download {label_path} from S3: {str(e)}")
+                    raise
+            
+            annotations = [BBoxClassId(
+                # (class_id, xc, yc, w, h)
+                coordinates=lbl[1:],
+                class_id=lbl[0],
+                class_name=None,
+                fmt=BBoxFormat.YOLO,
+                img_width=image_width if image_width else None,
+                img_height=image_height if image_height else None
+            ) for lbl in read_label(local_label_path)]
+            image_label_pairs.append((image_path, image, annotations))
+         
         return image_label_pairs
 
 class YoloDataset(Dataset):

@@ -258,9 +258,11 @@ class COCOS3Loader(BaseDataloader, S3):
         self.download_files_from_S3 = download_file
         self.dest_folder_path = dest_folder_path
         self.max_files = max_files
-        
+        self.start_date = start_date
+        self.end_date = end_date
+
         if self.download_files_from_S3:
-            if max_files <= 0:
+            if self.max_files <= 0:
                 raise ValueError("max_files must be > 0 when download_file is True")
         self.logger = logging.getLogger(__name__)
         self.logger.info("Initializing COCO dataset loader")
@@ -397,12 +399,12 @@ class COCOS3Loader(BaseDataloader, S3):
         """Merge multiple COCO datasets into one."""
         raise NotImplementedError("Merging COCO datasets is not implemented yet")
     
-    def _create_image_annotation_pairs(self) -> List[Tuple[str, List[Dict]]]:
+    def _create_image_annotation_pairs(self) -> List[Tuple[str, Image, List[Dict]]]:
         """
         Create pairs of image paths and their corresponding annotations for S3.
 
         Returns:
-            List of tuples containing (image_path, annotations_list) pairs
+            List of tuples containing (image_path, image, annotations_list) pairs
         """
         image_annotation_pairs = []
 
