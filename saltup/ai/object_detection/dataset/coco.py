@@ -31,6 +31,7 @@ from collections import defaultdict, OrderedDict
 from typing import Dict, List, Tuple, Optional, Union
 
 from saltup.utils.data.s3.s3_utils import S3
+import tempfile
 from botocore.exceptions import ClientError
 from saltup.utils.data.image.image_utils import Image
 from saltup.ai.object_detection.utils.bbox import BBox, BBoxClassId, BBoxFormat
@@ -211,21 +212,14 @@ class COCOLoader(BaseDataloader):
 
 
 
-class COCOS3Loader(BaseDataloader, S3):
+class COCOS3Loader(BaseDataloader):
     def __init__(
         self,
-        bucket_name:str,
         images_dir: str,
-        annotations_file: str, 
-        aws_access_key_id:str =None,
-        aws_secret_access_key:str =None,
-        aws_credential_filepath:str ="~/.aws/credentials",
-        section: str='default',
+        annotations_file: str,
+        S3_client: S3,
         download_file: bool = False,
         max_files: int = -1,
-        start_date: str = None,
-        end_date: str = None,
-        dest_folder_path: str = None,
         color_mode: ColorMode = ColorMode.RGB
     ):
         """
@@ -246,20 +240,10 @@ class COCOS3Loader(BaseDataloader, S3):
             ValueError: If paths are invalid
             FileNotFoundError: If directories or files don't exist
         """
-        # Initialize S3
-        S3.__init__(
-            self,
-            bucket_name=bucket_name,
-            aws_access_key_id=aws_access_key_id,
-            aws_secret_access_key=aws_secret_access_key,
-            aws_credential_filepath=aws_credential_filepath,
-            section=section
-        )
         self.download_files_from_S3 = download_file
-        self.dest_folder_path = dest_folder_path
         self.max_files = max_files
-        self.start_date = start_date
-        self.end_date = end_date
+        self.downloaded_files = 0
+        self.s3_client = S3_client
 
         if self.download_files_from_S3:
             if self.max_files <= 0:
@@ -295,17 +279,17 @@ class COCOS3Loader(BaseDataloader, S3):
             self._current_index = 0  # Reset for next iteration
             raise StopIteration
         
-        image_path, annotations = self._load_item(self._current_index)
+        image_path, image, annotations = self._load_item(self._current_index)
         self._current_index += 1
-        return image_path, annotations
+        return image_path, image, annotations
 
     def __len__(self):
         """Return total number of samples in dataset."""
         return len(self.image_annotation_pairs)
     
     def __getitem__(self, idx: Union[int, slice]) -> Union[
-        Tuple[str, List[BBoxClassId]],
-        List[Tuple[str, List[BBoxClassId]]]
+        Tuple[str, Image, List[BBoxClassId]],
+        List[Tuple[str, Image, List[BBoxClassId]]]
     ]:
         """Get item(s) by index.
         
@@ -332,18 +316,14 @@ class COCOS3Loader(BaseDataloader, S3):
         class_ids = set(bbox.class_id for bbox in bboxes)
         return sorted(class_ids)
 
-    def _load_item(self, idx: int) -> Tuple[str, List[BBoxClassId]]:
+    def _load_item(self, idx: int) -> Tuple[str, Image, List[BBoxClassId]]:
         """Load single item by index.
-        
-        A differenza di YOLO e Pascal VOC, non necessitiamo di caricare e parsare
-        file di annotazione poiché le annotazioni sono già state processate in
-        _create_image_annotation_pairs().
-        
+
         Args:
             idx: Index of the item to load
-            
+
         Returns:
-            Tuple of (image, annotations)
+            Tuple of (image_path, image, annotations)
             
         Raises:
             IndexError: If index out of range
@@ -353,14 +333,34 @@ class COCOS3Loader(BaseDataloader, S3):
         if not 0 <= idx < len(self):
             raise IndexError("Index out of range")
             
-        image_path, image, annotations = self.image_annotation_pairs[idx]
+        image_path, annotations = self.image_annotation_pairs[idx]
+        if self.download_files_from_S3 and self.downloaded_files < self.max_files:
             
-        return image_path, image, annotations
+            with tempfile.TemporaryDirectory() as tmpdirname:
+                print('created temporary directory', tmpdirname)
+                
+                try:
+                    self.s3_client.download_file(
+                        file_path=image_path,
+                        destination_path=tmpdirname
+                    )
+                    self.logger.info(f"Downloaded {image_path} to {tmpdirname}")
+                    self.downloaded_files += 1
+                except ClientError as e:
+                    self.logger.error(f"Failed to download {image_path} from S3: {str(e)}")
+                    image = None
+                    raise
+                image = self.load_image(os.path.join(tmpdirname, os.path.basename(image_path)), self.color_mode)
+        else:
+            image = None
+        full_image_path = os.path.join("s3://", self.s3_client._bucket_name, image_path)
+        
+        return full_image_path, image, annotations
 
     def _load_annotations(self) -> Dict:
         """Load COCO annotations from JSON file."""
         try:
-            obj = self._client.get_object(Bucket=self._bucket_name, Key=str(self.annotations_file))
+            obj = self.s3_client._client.get_object(Bucket=self.s3_client._bucket_name, Key=str(self.annotations_file))
             content = obj['Body'].read().decode("utf-8")
             
         except ClientError as e:
@@ -379,17 +379,6 @@ class COCOS3Loader(BaseDataloader, S3):
         except Exception as e:
             self.logger.error(f"Error loading annotations from {self.annotations_file}: {str(e)}")
             raise
-        
-    def get_list_pairs(self) -> List[Tuple[str, List[BBoxClassId]]]:
-        """
-        Get list of image-annotation pairs.
-
-        Returns:
-            List of tuples containing (image_path, annotations) pairs
-        """
-        list_images_path, images, list_annotations = zip(*self.image_annotation_pairs)
-
-        return list_images_path, images, list_annotations
 
     def split(self, ratio):
         raise NotImplementedError("Splitting COCO datasets is not implemented yet")
@@ -398,13 +387,13 @@ class COCOS3Loader(BaseDataloader, S3):
     def merge(coco_dl1, coco_dl2) -> 'COCOLoader': 
         """Merge multiple COCO datasets into one."""
         raise NotImplementedError("Merging COCO datasets is not implemented yet")
-    
-    def _create_image_annotation_pairs(self) -> List[Tuple[str, Image, List[Dict]]]:
+
+    def _create_image_annotation_pairs(self) -> List[Tuple[str, List[Dict]]]:
         """
         Create pairs of image paths and their corresponding annotations for S3.
 
         Returns:
-            List of tuples containing (image_path, image, annotations_list) pairs
+            List of tuples containing (image_path, annotations_list) pairs
         """
         image_annotation_pairs = []
 
@@ -414,34 +403,14 @@ class COCOS3Loader(BaseDataloader, S3):
             image_to_annotations[ann['image_id']].append(ann)
 
         skipped_images = 0
-        files_downloaded = 0
         for img in self.annotations['images']:
             s3_image_path = os.path.join(str(self.image_dir), img['file_name'])
             try:
                 # Check if the object exists and is reachable in S3
-                self._client.head_object(Bucket=self._bucket_name, Key=s3_image_path)
+                self.s3_client._client.head_object(Bucket=self.s3_client._bucket_name, Key=s3_image_path)
                 image_exists = True
-                
-                if self.download_files_from_S3 and files_downloaded < self.max_files:
-                    local_image_path = os.path.join(self.dest_folder_path, os.path.basename(s3_image_path))
-                    destination_folder = os.path.join(self.dest_folder_path, "images")
-                    try:
-                        self.download_file(
-                            file_path=s3_image_path,
-                            destination_path=destination_folder
-                        )
-                        self.logger.info(f"Downloaded {s3_image_path} to {local_image_path}")
-                    except ClientError as e:
-                        self.logger.error(f"Failed to download {s3_image_path} from S3: {str(e)}")
-                        raise
-                    image = self.load_image(local_image_path, self.color_mode)
-                    
-            except ClientError as e:
-                # file not found
-                if e.response['Error']['Code'] == "NoSuchKey":
-                    skipped_images += 1
-                    self.logger.warning(f"S3 image not found: {img['file_name']}")
-                    continue
+            except ClientError:
+                image_exists = False
             if image_exists:
                 annotations = [BBoxClassId(
                     coordinates=annotation_raw['bbox'],
@@ -450,10 +419,9 @@ class COCOS3Loader(BaseDataloader, S3):
                     img_width=img['width'],
                     fmt=BBoxFormat.TOPLEFT_ABSOLUTE
                 ) for annotation_raw in image_to_annotations[img['id']]]
-                if not self.download_files_from_S3:
-                    image = None
+
                 image_annotation_pairs.append(
-                    (s3_image_path, image, annotations)
+                    (s3_image_path, annotations)
                 )
             else:
                 skipped_images += 1
