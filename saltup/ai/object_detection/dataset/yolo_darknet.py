@@ -5,6 +5,7 @@ import random
 import shutil
 import numpy as np
 from tqdm import tqdm
+import tempfile
 from pathlib import Path
 from collections import defaultdict, Counter, OrderedDict
 from typing import Iterable, Union, List, Dict, Optional, Tuple, Set
@@ -59,20 +60,20 @@ class YoloDarknetLoader(BaseDataloader):
         self._current_index = 0  # Reset position when creating new iterator
         return self
 
-    def __next__(self) -> Tuple[Image, List[BBoxClassId]]:
+    def __next__(self) -> Tuple[str, Image, List[BBoxClassId]]:
         """Get next item from dataset."""
         if self._current_index >= len(self.image_label_pairs):
             self._current_index = 0  # Reset for next iteration
             raise StopIteration
-        
-        image, annotations = self._load_item(self._current_index) 
+
+        image_path, image, annotations = self._load_item(self._current_index)
         self._current_index += 1
-        
-        return image, annotations
-    
+
+        return image_path, image, annotations
+
     def __getitem__(self, idx: Union[int, slice])-> Union[
-        Tuple[Image, List[BBoxClassId]],
-        List[Tuple[Image, List[BBoxClassId]]]
+        Tuple[str, Image, List[BBoxClassId]],
+        List[Tuple[str, Image, List[BBoxClassId]]]
     ]:
         """Get item(s) by index.
         
@@ -80,8 +81,8 @@ class YoloDarknetLoader(BaseDataloader):
             idx: Integer index or slice object
             
         Returns:
-            Single (image, annotations) tuple or list of tuples if slice
-            
+            Single (image_path, image, annotations) tuple or list of tuples if slice
+
         Raises:
             IndexError: If index out of range
         """
@@ -93,14 +94,14 @@ class YoloDarknetLoader(BaseDataloader):
             # Handle single index
             return self._load_item(idx)
         
-    def _load_item(self, idx: int)-> Tuple[Image, List[BBoxClassId]]:
+    def _load_item(self, idx: int)-> Tuple[str, Image, List[BBoxClassId]]:
         """Load single item by index.
         
         Args:
             idx: Index of the item to load
             
         Returns:
-            Tuple of (image, annotations)
+            Tuple of (image_path, image, annotations)
             
         Raises:
             IndexError: If index out of range
@@ -123,8 +124,8 @@ class YoloDarknetLoader(BaseDataloader):
             img_width=image_width,
             img_height=image_height
         ) for lbl in read_label(label_path)]
-        
-        return image, annotations        
+
+        return image_path, image, annotations
 
     def __len__(self):
         """Return total number of samples in dataset."""
@@ -171,68 +172,43 @@ class YoloDarknetLoader(BaseDataloader):
         return image_label_pairs
 
 
-class YoloDarknetS3Loader(BaseDataloader, S3):
+class YoloDarknetS3Loader(BaseDataloader):
     def __init__(
         self,
-        bucket_name:str,
         images_dir: str,
-        labels_dir: str, 
-        aws_access_key_id:str =None,
-        aws_secret_access_key:str =None,
-        aws_credential_filepath:str ="~/.aws/credentials",
+        labels_dir: str,
+        s3_client: S3,
         color_mode: ColorMode = ColorMode.RGB,
-        section: str ='default',
-        download_file: bool = False,
+        download_file: bool = True,
         max_files: int = -1,
-        start_date: str = None,
-        end_date: str = None,
-        dest_folder_path: str = None,
     ):
         """
         Initialize YoloDarknetS3Loader for datasets stored on S3.
 
         Args:
-            bucket_name: Name of the S3 bucket
-            images_dir: Local directory for images (downloaded from S3)
-            labels_dir: Local directory for labels (downloaded from S3)
-            aws_access_key_id: AWS access key ID (optional)
-            aws_secret_access_key: AWS secret access key (optional)
-            aws_credential_filepath: Path to AWS credentials file (default: ~/.aws/credentials)
-            section: Section in AWS credentials file (default: 'default')
-            download_file: If True, download files from S3 to local directories
+            images_dir: Local path or S3 URI for images (e.g. 's3://bucket/path' or '/local/path')
+            labels_dir: Local path or S3 URI for labels (e.g. 's3://bucket/path' or '/local/path')
+            s3_client: An S3 helper/client instance providing download/list methods
+            download_file: If True, download files from S3 to local temporary directories when iterating
             color_mode: Color mode for loading images
+            max_files: Maximum number of files to download when download_file is True (-1 for unlimited)
 
         Raises:
-            FileNotFoundError: If local directories don't exist after download
+            FileNotFoundError: If local directories don't exist when download_file is False
+            ValueError: If max_files is invalid when download_file is True
         """
-        # Initialize S3 parent
-        S3.__init__(
-            self,
-            bucket_name=bucket_name,
-            aws_access_key_id=aws_access_key_id,
-            aws_secret_access_key=aws_secret_access_key,
-            aws_credential_filepath=aws_credential_filepath,
-            section=section
-        )
         
-        self.download_files_from_S3 = download_file
-        self.dest_folder_path = dest_folder_path
+        self.download_file = download_file
         self.max_files = max_files
-        self.start_date = start_date
-        self.end_date = end_date
+        self.downloaded_files = 0
+        self.s3_client = s3_client
         
-        if self.download_files_from_S3:
+        if self.download_file:
             if self.max_files <= 0:
                 raise ValueError("max_files must be > 0 when download_file is True")
         
         self.__logger = configure_logging.get_logger(__name__)
         self.__logger.info("Initializing YOLO Darknet dataset loader")
-        
-        # # Validate directories existence
-        # if not os.path.exists(images_dir):
-        #     raise FileNotFoundError(f"Images directory not found: {images_dir}")
-        # if not os.path.exists(labels_dir):
-        #     raise FileNotFoundError(f"Labels directory not found: {labels_dir}")
             
         self._images_dir = Path(images_dir)
         self._labels_dir = Path(labels_dir)
@@ -248,30 +224,30 @@ class YoloDarknetS3Loader(BaseDataloader, S3):
         self._current_index = 0  # Reset position when creating new iterator
         return self
 
-    def __next__(self) -> Tuple[Image, List[BBoxClassId]]:
+    def __next__(self) -> Tuple[str, Image, List[BBoxClassId]]:
         """Get next item from dataset."""
         if self._current_index >= len(self.image_label_pairs):
             self._current_index = 0  # Reset for next iteration
             raise StopIteration
         
-        image_path, annotations = self._load_item(self._current_index)
+        image_path, image, annotations = self._load_item(self._current_index)
 
         self._current_index += 1
 
-        return image_path, annotations
+        return image_path, image, annotations
 
     def __getitem__(self, idx: Union[int, slice])-> Union[
-        Tuple[Image, List[BBoxClassId]],
-        List[Tuple[Image, List[BBoxClassId]]]
+        Tuple[str, Image, List[BBoxClassId]],
+        List[Tuple[str, Image, List[BBoxClassId]]]
     ]:
         """Get item(s) by index.
-        
+
         Args:
             idx: Integer index or slice object
-            
+
         Returns:
-            Single (image, annotations) tuple or list of tuples if slice
-            
+            Single (image_path, image, annotations) tuple or list of tuples if slice
+
         Raises:
             IndexError: If index out of range
         """
@@ -283,15 +259,15 @@ class YoloDarknetS3Loader(BaseDataloader, S3):
             # Handle single index
             return self._load_item(idx)
         
-    def _load_item(self, idx: int)-> Tuple[Image, List[BBoxClassId]]:
+    def _load_item(self, idx: int)-> Tuple[str, Image, List[BBoxClassId]]:
         """Load single item by index.
-        
+
         Args:
             idx: Index of the item to load
-            
+
         Returns:
-            Tuple of (image, annotations)
-            
+            Tuple of (image_path, image, annotations)
+
         Raises:
             IndexError: If index out of range
         """
@@ -299,10 +275,56 @@ class YoloDarknetS3Loader(BaseDataloader, S3):
             idx += len(self)
         if not 0 <= idx < len(self):
             raise IndexError("Index out of range")
+
+        image_path, label_path = self.image_label_pairs[idx]
+
+        if self.downloaded_files < self.max_files:
+            with tempfile.TemporaryDirectory() as tmpdirname:
+                print('created temporary directory', tmpdirname)
+                
+                try:
+                    self.s3_client.download_file(
+                        file_path=image_path,
+                        destination_path=tmpdirname
+                    )
+                    self.__logger.info(f"Downloaded {image_path} to {tmpdirname}")
+                    self.downloaded_files += 1
+                except ClientError as e:
+                    self.__logger.error(f"Failed to download {image_path} from S3: {str(e)}")
+                    image = None
+                    raise
+                image = self.load_image(os.path.join(tmpdirname, os.path.basename(image_path)), self.color_mode)
+                image_width, image_height = image.get_width(), image.get_height()
+                
+        else:
+            image = None
+            image_width, image_height = None, None
+            
+        with tempfile.TemporaryDirectory() as tmpdirname:
+            print('created temporary directory', tmpdirname)
+            try:
+                self.s3_client.download_file(
+                    file_path=label_path,
+                    destination_path=tmpdirname
+                )
+                self.__logger.info(f"Downloaded {label_path} to {tmpdirname}")
+                temp_label_path = os.path.join(tmpdirname, os.path.basename(label_path))
+            except ClientError as e:
+                self.__logger.error(f"Failed to download {label_path} from S3: {str(e)}")
+                raise
         
-        image_path, image, annotations = self.image_label_pairs[idx]
-        
-        return image_path, image, annotations        
+            annotations = [BBoxClassId(
+                # (class_id, xc, yc, w, h)
+                coordinates=lbl[1:],
+                class_id=lbl[0],
+                class_name=None,
+                fmt=BBoxFormat.YOLO,
+                img_width=image_width if image_width else None,
+                img_height=image_height if image_height else None
+            ) for lbl in read_label(temp_label_path)]
+
+        image_path = os.path.join("s3://", self.s3_client._bucket_name, image_path)
+        return image_path, image, annotations
 
     def __len__(self):
         """Return total number of samples in dataset."""
@@ -321,73 +343,33 @@ class YoloDarknetS3Loader(BaseDataloader, S3):
         """
         raise NotImplementedError("Merging not implemented yet")
 
-    def _load_image_label_pairs(self) -> List[Tuple[str, Image, List[BBoxClassId]]]:
+    def _load_image_label_pairs(self) -> List[Tuple[str, str]]:
         """
         Load pairs from images and labels directories.
         
         Returns:
-            List of tuples containing (image_path, image, annotations) pairs
+            List of tuples containing (image_path, annotations) pairs
         """
         image_label_pairs = []
         skipped_images = 0
-        downloaded_files = 0
-        image_list = list_files_by_date(self, self._images_dir, self.start_date, self.end_date, ['.jpg', '.jpeg', '.png'], only_basename=True)
-        label_list = self.ls(self._labels_dir, ['.txt'], only_basename=True)
-        if len(image_list) > self.max_files:
-            image_list = image_list[:self.max_files]
+
+        # List files by date if start_date and end_date are provided
+        image_list = self.s3_client.ls(str(self._images_dir), ['*.jpg', '*.jpeg', '*.png'], only_basename=True)
+        label_list = self.s3_client.ls(str(self._labels_dir), ['*.txt'], only_basename=True)
+        
         for image_file in image_list:
             common_name = image_file.split(".")[0]
             label_name = f"{common_name}.txt"
             if label_name in label_list:
                 self.__logger.info(f"Found label for {image_file}: {label_name}")
+                image_path = str(self._images_dir / image_file)
+                label_path = str(self._labels_dir / label_name)
+                image_label_pairs.append((image_path, label_path))
             else:
                 self.__logger.warning(f"Label not found for {image_file}")
                 skipped_images += 1
+                continue
             
-            if self.download_files_from_S3 and downloaded_files < self.max_files:
-                local_image_path = os.path.join(self.dest_folder_path, image_file)
-                origin_path = os.path.join(self._images_dir, image_file)
-                try:
-                    self.download_file(
-                        file_path=origin_path,
-                        destination_path=self.dest_folder_path
-                    )
-                    self.logger.info(f"Downloaded {image_path} to {local_image_path}")
-                except ClientError as e:
-                    self.logger.error(f"Failed to download {image_path} from S3: {str(e)}")
-                    raise
-                image = self.load_image(local_image_path, self.color_mode)
-                image_width, image_height = image.get_width(), image.get_height()
-                image_path = local_image_path
-            else:
-                image = None
-                image_width, image_height = None, None
-                image_path = os.path.join("s3://", self._bucket_name, self._images_dir, image_file)
-                
-            local_label_path = os.path.join(self.dest_folder_path, label_name)
-            if self.download_files_from_S3 and not os.path.exists(local_label_path):
-                label_path = os.path.join(self._labels_dir, label_name)
-                try:
-                    self.download_file(
-                        file_path=label_path,
-                        destination_path=local_label_path
-                    )
-                    self.logger.info(f"Downloaded {label_path} to {local_label_path}")
-                except ClientError as e:
-                    self.logger.error(f"Failed to download {label_path} from S3: {str(e)}")
-                    raise
-            
-            annotations = [BBoxClassId(
-                # (class_id, xc, yc, w, h)
-                coordinates=lbl[1:],
-                class_id=lbl[0],
-                class_name=None,
-                fmt=BBoxFormat.YOLO,
-                img_width=image_width if image_width else None,
-                img_height=image_height if image_height else None
-            ) for lbl in read_label(local_label_path)]
-            image_label_pairs.append((image_path, image, annotations))
-         
         return image_label_pairs
 
 class YoloDataset(Dataset):

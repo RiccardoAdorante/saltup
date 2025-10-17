@@ -26,12 +26,12 @@ import shutil
 import random
 import numpy as np
 from tqdm import tqdm
+import tempfile
 from pathlib import Path
 from collections import defaultdict, OrderedDict
 from typing import Dict, List, Tuple, Optional, Union
 
 from saltup.utils.data.s3.s3_utils import S3
-import tempfile
 from botocore.exceptions import ClientError
 from saltup.utils.data.image.image_utils import Image
 from saltup.ai.object_detection.utils.bbox import BBox, BBoxClassId, BBoxFormat
@@ -217,7 +217,7 @@ class COCOS3Loader(BaseDataloader):
         self,
         images_dir: str,
         annotations_file: str,
-        S3_client: S3,
+        s3_client: S3,
         download_file: bool = False,
         max_files: int = -1,
         color_mode: ColorMode = ColorMode.RGB
@@ -226,13 +226,9 @@ class COCOS3Loader(BaseDataloader):
         Initialize COCO dataset loader from S3.
 
         Args:
-            bucket_name: Name of the S3 bucket
             images_dir: Local directory to store images
             annotations_file: Local path to COCO annotations JSON file
-            aws_access_key_id: AWS access key ID (optional)
-            aws_secret_access_key: AWS secret access key (optional)
-            aws_credential_filepath: Path to AWS credentials file (default: ~/.aws/credentials)
-            section: Section in AWS credentials file (default: 'default')
+            s3_client: Initialized S3 client for accessing S3 bucket
             download_file: Whether to download files from S3 if not present locally
             color_mode: Color mode for loading images
 
@@ -240,22 +236,17 @@ class COCOS3Loader(BaseDataloader):
             ValueError: If paths are invalid
             FileNotFoundError: If directories or files don't exist
         """
-        self.download_files_from_S3 = download_file
+        self.download_file = download_file
         self.max_files = max_files
         self.downloaded_files = 0
-        self.s3_client = S3_client
+        self.s3_client = s3_client
 
-        if self.download_files_from_S3:
+        if self.download_file:
             if self.max_files <= 0:
                 raise ValueError("max_files must be > 0 when download_file is True")
         self.logger = logging.getLogger(__name__)
         self.logger.info("Initializing COCO dataset loader")
-        
-        # Validate input paths
-        # if not os.path.exists(images_dir):
-        #     raise FileNotFoundError(f"Images directory not found: {images_dir}")
-        # if not os.path.exists(annotations_file):
-        #     raise FileNotFoundError(f"Annotations file not found: {annotations_file}")
+    
             
         self.image_dir = Path(images_dir)
         self.annotations_file = Path(annotations_file)
@@ -273,7 +264,7 @@ class COCOS3Loader(BaseDataloader):
         self._current_index = 0  # Reset position when creating new iterator
         return self
 
-    def __next__(self) -> Tuple[Image, List[BBoxClassId]]:
+    def __next__(self) -> Tuple[str, Image, List[BBoxClassId]]:
         """Get next item from dataset."""
         if self._current_index >= len(self.image_annotation_pairs):
             self._current_index = 0  # Reset for next iteration
@@ -309,12 +300,6 @@ class COCOS3Loader(BaseDataloader):
         else:
             # Handle single index
             return self._load_item(idx)
-        
-    def get_list_labels(self) -> List[int]:
-        """Get list of all class labels in the dataset."""
-        image_path, bboxes = self.image_annotation_pairs
-        class_ids = set(bbox.class_id for bbox in bboxes)
-        return sorted(class_ids)
 
     def _load_item(self, idx: int) -> Tuple[str, Image, List[BBoxClassId]]:
         """Load single item by index.
@@ -334,7 +319,7 @@ class COCOS3Loader(BaseDataloader):
             raise IndexError("Index out of range")
             
         image_path, annotations = self.image_annotation_pairs[idx]
-        if self.download_files_from_S3 and self.downloaded_files < self.max_files:
+        if self.download_file and self.downloaded_files < self.max_files:
             
             with tempfile.TemporaryDirectory() as tmpdirname:
                 print('created temporary directory', tmpdirname)
