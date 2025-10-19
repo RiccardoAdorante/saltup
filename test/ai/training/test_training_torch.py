@@ -97,83 +97,60 @@ class TestTrainPytorch:
         """Test training a PyTorch model."""
         output_dir = str(tmp_path / "output")
         os.makedirs(output_dir, exist_ok=True)
+            
+        # The new implementation expects PyTorch DataLoader directly
+        # Convert our data generator to DataLoader format
+        train_loader = DataLoader(mock_pytorch_data_generator, batch_size=4, shuffle=True)
+        val_loader = DataLoader(mock_pytorch_data_generator, batch_size=4, shuffle=False)
         
-        with patch.object(type(SaltupEnv), 'SALTUP_TRAINING_PYTORCH_ARGS', new_callable=PropertyMock) as mock_pytorch_args, \
-             patch.object(type(SaltupEnv), 'SALTUP_PYTORCH_DEVICE', new_callable=PropertyMock) as mock_device, \
-             patch.object(type(SaltupEnv), 'SALTUP_KERAS_TRAIN_VERBOSE', new_callable=PropertyMock) as mock_verbose:
-            
-            mock_pytorch_args.return_value = {
-                'early_stopping_patience': 0,
-                'use_scheduler_per_epoch': False
-            }
-            mock_device.return_value = 'cpu'
-            mock_verbose.return_value = 0
-            
-            # The new implementation expects PyTorch DataLoader directly
-            # Convert our data generator to DataLoader format
-            train_loader = DataLoader(mock_pytorch_data_generator, batch_size=4, shuffle=True)
-            val_loader = DataLoader(mock_pytorch_data_generator, batch_size=4, shuffle=False)
-            
-            # Define loss function and optimizer
-            loss_function = nn.CrossEntropyLoss()
-            optimizer = torch.optim.Adam(mock_pytorch_model.parameters(), lr=0.001)
-            
-            # Train the model
-            trained_model_path = _train_model(
-                model=mock_pytorch_model,
-                train_gen=train_loader,
-                val_gen=val_loader,
-                output_dir=output_dir,
-                epochs=1,
-                loss_function=loss_function,
-                optimizer=optimizer,
-                scheduler=None,
-                model_output_name="test_model"
-            )
-            
-            # Assertions
-            assert os.path.exists(trained_model_path)
-            assert trained_model_path.endswith(".pth")
-            assert os.path.exists(os.path.join(output_dir, "saved_models"))
+        # Define loss function and optimizer
+        loss_function = nn.CrossEntropyLoss()
+        optimizer = torch.optim.Adam(mock_pytorch_model.parameters(), lr=0.001)
+        
+        # Train the model
+        trained_model_path = _train_model(
+            model=mock_pytorch_model,
+            train_gen=train_loader,
+            val_gen=val_loader,
+            output_dir=output_dir,
+            epochs=1,
+            loss_function=loss_function,
+            optimizer=optimizer,
+            scheduler=None,
+            model_output_name="test_model"
+        )
+        
+        # Assertions
+        assert os.path.exists(trained_model_path)
+        assert trained_model_path.endswith(".pth")
+        assert os.path.exists(os.path.join(output_dir, "saved_models"))
             
     def test_training_without_kfold_pytorch(self, mock_pytorch_model, mock_pytorch_data_generator, tmp_path):
         """Test training without k-fold cross validation for PyTorch model."""
         output_dir = str(tmp_path / "output")
         os.makedirs(output_dir, exist_ok=True)
+            
+        # Define loss function and optimizer
+        loss_function = nn.CrossEntropyLoss()
+        optimizer = torch.optim.Adam(mock_pytorch_model.parameters(), lr=0.001)
         
-        with patch.object(type(SaltupEnv), 'SALTUP_TRAINING_PYTORCH_ARGS', new_callable=PropertyMock) as mock_pytorch_args, \
-             patch.object(type(SaltupEnv), 'SALTUP_PYTORCH_DEVICE', new_callable=PropertyMock) as mock_device, \
-             patch.object(type(SaltupEnv), 'SALTUP_KERAS_TRAIN_VERBOSE', new_callable=PropertyMock) as mock_verbose, \
-             patch('saltup.ai.training.train.convert_torch_to_onnx') as mock_torch_onnx_conv:
-            
-            mock_pytorch_args.return_value = {
-                'early_stopping_patience': 0,
-                'use_scheduler_per_epoch': False
-            }
-            mock_device.return_value = 'cpu'
-            mock_verbose.return_value = 0
-            
-            # Define loss function and optimizer
-            loss_function = nn.CrossEntropyLoss()
-            optimizer = torch.optim.Adam(mock_pytorch_model.parameters(), lr=0.001)
-            
-            # Train the model
-            result = training(
-                train_DataGenerator=mock_pytorch_data_generator,
-                model=mock_pytorch_model,
-                loss_function=loss_function,
-                optimizer=optimizer,
-                epochs=1,
-                output_dir=output_dir,
-                validation=[0.8, 0.2],
-                kfold_param={'enable': False},
-                model_output_name="test_model"
-            )
-            
-            # Assertions
-            assert result['kfolds'] is False
-            assert len(result['models_paths']) >= 1
-            assert os.path.exists(os.path.join(output_dir, "options.txt"))
+        # Train the model
+        result = training(
+            train_DataGenerator=mock_pytorch_data_generator,
+            model=mock_pytorch_model,
+            loss_function=loss_function,
+            optimizer=optimizer,
+            epochs=1,
+            output_dir=output_dir,
+            validation=[0.8, 0.2],
+            kfold_param={'enable': False},
+            model_output_name="test_model"
+        )
+        
+        # Assertions
+        assert result['kfolds'] is False
+        assert len(result['models_paths']) >= 1
+        assert os.path.exists(os.path.join(output_dir, "options.txt"))
 
 class TestCallbackIntegration:
     """Test callback integration in training."""
@@ -182,51 +159,40 @@ class TestCallbackIntegration:
         """Test PyTorch training with callbacks."""
         output_dir = str(tmp_path / "output")
         os.makedirs(output_dir, exist_ok=True)
+            
+        # Create a mock callback
+        mock_callback = Mock()
+        mock_callback.on_train_begin = Mock()
+        mock_callback.on_epoch_end = Mock()
+        mock_callback.on_train_end = Mock()
         
-        with patch.object(type(SaltupEnv), 'SALTUP_TRAINING_PYTORCH_ARGS', new_callable=PropertyMock) as mock_pytorch_args, \
-             patch.object(type(SaltupEnv), 'SALTUP_PYTORCH_DEVICE', new_callable=PropertyMock) as mock_device, \
-             patch.object(type(SaltupEnv), 'SALTUP_KERAS_TRAIN_VERBOSE', new_callable=PropertyMock) as mock_verbose:
-            
-            mock_pytorch_args.return_value = {
-                'early_stopping_patience': 0,
-                'use_scheduler_per_epoch': False
-            }
-            mock_device.return_value = 'cpu'
-            mock_verbose.return_value = 0
-            
-            # Create a mock callback
-            mock_callback = Mock()
-            mock_callback.on_train_begin = Mock()
-            mock_callback.on_epoch_end = Mock()
-            mock_callback.on_train_end = Mock()
-            
-            # Convert to DataLoader
-            train_loader = DataLoader(mock_pytorch_data_generator, batch_size=4, shuffle=True)
-            val_loader = DataLoader(mock_pytorch_data_generator, batch_size=4, shuffle=False)
-            
-            # Define loss function and optimizer
-            loss_function = nn.CrossEntropyLoss()
-            optimizer = torch.optim.Adam(mock_pytorch_model.parameters(), lr=0.001)
-            
-            # Train the model with callbacks
-            trained_model_path = _train_model(
-                model=mock_pytorch_model,
-                train_gen=train_loader,
-                val_gen=val_loader,
-                output_dir=output_dir,
-                epochs=1,
-                loss_function=loss_function,
-                optimizer=optimizer,
-                scheduler=None,
-                model_output_name="test_model",
-                app_callbacks=[mock_callback]
-            )
-            
-            # Assertions
-            assert os.path.exists(trained_model_path)
-            mock_callback.on_train_begin.assert_called_once()
-            mock_callback.on_epoch_end.assert_called_once()
-            mock_callback.on_train_end.assert_called_once()
+        # Convert to DataLoader
+        train_loader = DataLoader(mock_pytorch_data_generator, batch_size=4, shuffle=True)
+        val_loader = DataLoader(mock_pytorch_data_generator, batch_size=4, shuffle=False)
+        
+        # Define loss function and optimizer
+        loss_function = nn.CrossEntropyLoss()
+        optimizer = torch.optim.Adam(mock_pytorch_model.parameters(), lr=0.001)
+        
+        # Train the model with callbacks
+        trained_model_path = _train_model(
+            model=mock_pytorch_model,
+            train_gen=train_loader,
+            val_gen=val_loader,
+            output_dir=output_dir,
+            epochs=1,
+            loss_function=loss_function,
+            optimizer=optimizer,
+            scheduler=None,
+            model_output_name="test_model",
+            app_callbacks=[mock_callback]
+        )
+        
+        # Assertions
+        assert os.path.exists(trained_model_path)
+        mock_callback.on_train_begin.assert_called_once()
+        mock_callback.on_epoch_end.assert_called_once()
+        mock_callback.on_train_end.assert_called_once()
 
 
 if __name__ == "__main__":

@@ -43,10 +43,10 @@ def mock_test_data_dir(tmp_path):
 @pytest.fixture
 def mock_keras_model():
     """Create a mock Keras model."""
-    model = keras.Sequential([
-        keras.layers.Flatten(input_shape=(32, 32, 3)),
-        keras.layers.Dense(2, activation="softmax")
-    ])
+    inputs = keras.Input(shape=(32, 32, 3))
+    x = keras.layers.Flatten()(inputs)
+    outputs = keras.layers.Dense(2, activation="softmax")(x)
+    model = keras.Model(inputs=inputs, outputs=outputs)
     return model
 
 
@@ -108,38 +108,28 @@ class TestTrainModel:
         """Test training a Keras model."""
         output_dir = str(tmp_path / "output")
         os.makedirs(output_dir, exist_ok=True)
+            
+        # Define loss function and optimizer
+        loss_function = keras.losses.CategoricalCrossentropy()
+        optimizer = keras.optimizers.Adam(learning_rate=0.001)
         
-        with patch.object(type(SaltupEnv), 'SALTUP_TRAINING_KERAS_COMPILE_ARGS', new_callable=PropertyMock) as mock_compile, \
-             patch.object(type(SaltupEnv), 'SALTUP_TRAINING_KERAS_FIT_ARGS', new_callable=PropertyMock) as mock_fit, \
-             patch.object(type(SaltupEnv), 'SALTUP_KERAS_TRAIN_SHUFFLE', new_callable=PropertyMock) as mock_shuffle, \
-             patch.object(type(SaltupEnv), 'SALTUP_KERAS_TRAIN_VERBOSE', new_callable=PropertyMock) as mock_verbose:
-            
-            mock_compile.return_value = {}
-            mock_fit.return_value = {}
-            mock_shuffle.return_value = True
-            mock_verbose.return_value = 0
-            
-            # Define loss function and optimizer
-            loss_function = keras.losses.CategoricalCrossentropy()
-            optimizer = keras.optimizers.Adam(learning_rate=0.001)
-            
-            # Train the model
-            trained_model_path = _train_model(
-                model=mock_keras_model,
-                train_gen=mock_keras_data_generator,
-                val_gen=mock_keras_data_generator,
-                output_dir=output_dir,
-                epochs=1,
-                loss_function=loss_function,
-                optimizer=optimizer,
-                scheduler=None,
-                model_output_name="test_model"
-            )
-            
-            # Assertions
-            assert os.path.exists(trained_model_path)
-            assert trained_model_path.endswith(".keras")
-            assert os.path.exists(os.path.join(output_dir, "saved_models"))
+        # Train the model
+        trained_model_path = _train_model(
+            model=mock_keras_model,
+            train_gen=mock_keras_data_generator,
+            val_gen=mock_keras_data_generator,
+            output_dir=output_dir,
+            epochs=1,
+            loss_function=loss_function,
+            optimizer=optimizer,
+            scheduler=None,
+            model_output_name="test_model"
+        )
+        
+        # Assertions
+        assert os.path.exists(trained_model_path)
+        assert trained_model_path.endswith(".keras")
+        assert os.path.exists(os.path.join(output_dir, "saved_models"))
         
     def test_train_model_keras_missing_optimizer(self, mock_keras_model, mock_keras_data_generator, tmp_path):
         """Test that training fails when optimizer is missing for Keras model."""
@@ -166,94 +156,54 @@ class TestTrainingFunction:
         """Test training without k-fold cross validation for Keras model."""
         output_dir = str(tmp_path / "output")
         os.makedirs(output_dir, exist_ok=True)
+            
+        # Define loss function and optimizer
+        loss_function = keras.losses.CategoricalCrossentropy()
+        optimizer = keras.optimizers.Adam(learning_rate=0.001)
         
-        with patch.object(type(SaltupEnv), 'SALTUP_TRAINING_KERAS_COMPILE_ARGS', new_callable=PropertyMock) as mock_compile, \
-             patch.object(type(SaltupEnv), 'SALTUP_TRAINING_KERAS_FIT_ARGS', new_callable=PropertyMock) as mock_fit, \
-             patch.object(type(SaltupEnv), 'SALTUP_KERAS_TRAIN_SHUFFLE', new_callable=PropertyMock) as mock_shuffle, \
-             patch.object(type(SaltupEnv), 'SALTUP_KERAS_TRAIN_VERBOSE', new_callable=PropertyMock) as mock_verbose:
-             #patch.object(type(SaltupEnv), 'SALTUP_ONNX_OPSET', new_callable=PropertyMock) as mock_opset:
-             #patch('saltup.ai.training.train.convert_keras_to_onnx') as mock_onnx_conv, \
-             #patch('saltup.ai.training.train.tflite_conversion') as mock_tflite_conv:
-
-            mock_compile.return_value = {}
-            mock_fit.return_value = {}
-            mock_shuffle.return_value = True
-            mock_verbose.return_value = 0
-            #mock_opset.return_value = 16
-            
-            # Mock the conversion functions
-            #mock_onnx_conv.return_value = (Mock(), Mock())
-            #mock_tflite_conv.return_value = os.path.join(output_dir, "saved_models", "test_model_best.tflite")
-            
-            # Define loss function and optimizer
-            loss_function = keras.losses.CategoricalCrossentropy()
-            optimizer = keras.optimizers.Adam(learning_rate=0.001)
-            
-            # Train the model
-            result = training(
-                train_DataGenerator=mock_keras_data_generator,
-                model=mock_keras_model,
-                loss_function=loss_function,
-                optimizer=optimizer,
-                epochs=1,
-                output_dir=output_dir,
-                validation=[0.8, 0.2],
-                kfold_param={'enable': False},
-                model_output_name="test_model"
-            ) 
-            
-            # Assertions
-            assert result['kfolds'] is False
-            assert len(result['models_paths']) >= 1
-            assert os.path.exists(os.path.join(output_dir, "options.txt"))
+        # Train the model
+        result = training(
+            train_DataGenerator=mock_keras_data_generator,
+            model=mock_keras_model,
+            loss_function=loss_function,
+            optimizer=optimizer,
+            epochs=1,
+            output_dir=output_dir,
+            validation=[0.8, 0.2],
+            kfold_param={'enable': False},
+            model_output_name="test_model"
+        ) 
+        
+        # Assertions
+        assert result['kfolds'] is False
+        assert len(result['models_paths']) >= 1
+        assert os.path.exists(os.path.join(output_dir, "options.txt"))
     
     def test_training_with_kfold_keras(self, mock_keras_model, mock_keras_data_generator, tmp_path):
         """Test training with k-fold cross validation for Keras model."""
         output_dir = str(tmp_path / "output")
         os.makedirs(output_dir, exist_ok=True)
+            
+        # Define loss function and optimizer
+        loss_function = keras.losses.CategoricalCrossentropy()
+        optimizer = keras.optimizers.Adam(learning_rate=0.001)
+
+        # Train the model
+        result = training(
+            train_DataGenerator=mock_keras_data_generator,
+            model=mock_keras_model,
+            loss_function=loss_function,
+            optimizer=optimizer,
+            epochs=1,
+            output_dir=output_dir,
+            kfold_param={'enable': True, 'split': [0.8, 0.2]},
+            model_output_name="test_model"
+        )
         
-        with patch.object(type(SaltupEnv), 'SALTUP_TRAINING_KERAS_COMPILE_ARGS', new_callable=PropertyMock) as mock_compile, \
-             patch.object(type(SaltupEnv), 'SALTUP_TRAINING_KERAS_FIT_ARGS', new_callable=PropertyMock) as mock_fit, \
-             patch.object(type(SaltupEnv), 'SALTUP_KERAS_TRAIN_SHUFFLE', new_callable=PropertyMock) as mock_shuffle, \
-             patch.object(type(SaltupEnv), 'SALTUP_KERAS_TRAIN_VERBOSE', new_callable=PropertyMock) as mock_verbose:
-             #patch.object(type(SaltupEnv), 'SALTUP_ONNX_OPSET', new_callable=PropertyMock) as mock_opset:
-             #patch('saltup.ai.training.train.convert_keras_to_onnx') as mock_onnx_conv, \
-             #patch('saltup.ai.training.train.tflite_conversion') as mock_tflite_conv:
-            
-            mock_compile.return_value = {}
-            mock_fit.return_value = {}
-            mock_shuffle.return_value = True
-            mock_verbose.return_value = 0
-            #mock_opset.return_value = 16
-            
-            # Mock the conversion functions
-            #mock_onnx_conv.return_value = (Mock(), Mock())
-            #mock_tflite_conv.return_value = os.path.join(output_dir, "golden_model_folder", "test_model.tflite")
-            
-            # Define loss function and optimizer
-            loss_function = keras.losses.CategoricalCrossentropy()
-            optimizer = keras.optimizers.Adam(learning_rate=0.001)
-            
-            # Mock the split method to return proper generators
-            mock_split_generators = [mock_keras_data_generator, mock_keras_data_generator]
-            
-            with patch.object(mock_keras_data_generator, 'split', return_value=mock_split_generators):
-                # Train the model
-                result = training(
-                    train_DataGenerator=mock_keras_data_generator,
-                    model=mock_keras_model,
-                    loss_function=loss_function,
-                    optimizer=optimizer,
-                    epochs=1,
-                    output_dir=output_dir,
-                    kfold_param={'enable': True, 'split': [0.8, 0.2]},
-                    model_output_name="test_model"
-                )
-                
-                # Assertions
-                assert result['kfolds'] is True
-                assert len(result['models_paths']) >= 1
-                assert os.path.exists(os.path.join(output_dir, "options.txt"))
+        # Assertions
+        assert result['kfolds'] is True
+        assert len(result['models_paths']) >= 1
+        assert os.path.exists(os.path.join(output_dir, "options.txt"))
     
     def test_training_with_validation_generator(self, mock_keras_model, mock_keras_data_generator, tmp_path):
         """Test training with validation generator instead of split ratio."""
@@ -263,38 +213,23 @@ class TestTrainingFunction:
         # Define loss function and optimizer
         loss_function = keras.losses.CategoricalCrossentropy()
         optimizer = keras.optimizers.Adam(learning_rate=0.001)
+            
+        # Train the model
+        result = training(
+            train_DataGenerator=mock_keras_data_generator,
+            model=mock_keras_model,
+            loss_function=loss_function,
+            optimizer=optimizer,
+            epochs=1,
+            output_dir=output_dir,
+            validation=mock_keras_data_generator,  # Use generator instead of split
+            kfold_param={'enable': False},
+            model_output_name="test_model"
+        )
         
-        with patch.object(type(SaltupEnv), 'SALTUP_TRAINING_KERAS_COMPILE_ARGS', new_callable=PropertyMock) as mock_compile, \
-             patch.object(type(SaltupEnv), 'SALTUP_TRAINING_KERAS_FIT_ARGS', new_callable=PropertyMock) as mock_fit, \
-             patch.object(type(SaltupEnv), 'SALTUP_KERAS_TRAIN_SHUFFLE', new_callable=PropertyMock) as mock_shuffle:
-             #patch.object(type(SaltupEnv), 'SALTUP_KERAS_TRAIN_VERBOSE', new_callable=PropertyMock) as mock_verbose:
-             #patch('saltup.ai.training.train.convert_keras_to_onnx') as mock_onnx_conv, \
-             #patch('saltup.ai.training.train.tflite_conversion') as mock_tflite_conv:
-            
-            mock_compile.return_value = {}
-            mock_fit.return_value = {}
-            mock_shuffle.return_value = True
-            #mock_verbose.return_value = 0
-            
-            #mock_onnx_conv.return_value = (Mock(), Mock())
-            #mock_tflite_conv.return_value = os.path.join(output_dir, "saved_models", "test_model_best.tflite")
-            
-            # Train the model
-            result = training(
-                train_DataGenerator=mock_keras_data_generator,
-                model=mock_keras_model,
-                loss_function=loss_function,
-                optimizer=optimizer,
-                epochs=1,
-                output_dir=output_dir,
-                validation=mock_keras_data_generator,  # Use generator instead of split
-                kfold_param={'enable': False},
-                model_output_name="test_model"
-            )
-            
-            # Assertions
-            assert result['kfolds'] is False
-            assert len(result['models_paths']) >= 1
+        # Assertions
+        assert result['kfolds'] is False
+        assert len(result['models_paths']) >= 1
             
     def test_training_pytorch_missing_optimizer(self, mock_pytorch_model, mock_pytorch_data_generator, tmp_path):
         """Test that training fails when optimizer is missing for PyTorch model."""
@@ -324,38 +259,23 @@ class TestTrainingFunction:
         # Define loss function and optimizer
         loss_function = keras.losses.CategoricalCrossentropy()
         optimizer = keras.optimizers.Adam(learning_rate=0.001)
+            
+        # Train the model with class weights
+        result = training(
+            train_DataGenerator=mock_keras_data_generator,
+            model=mock_keras_model,
+            loss_function=loss_function,
+            optimizer=optimizer,
+            epochs=1,
+            output_dir=output_dir,
+            kfold_param={'enable': False, 'split': [0.8, 0.2]},
+            model_output_name="test_model",
+            classification_class_weight={0: 1.0, 1: 2.0}
+        )
         
-        with patch.object(type(SaltupEnv), 'SALTUP_TRAINING_KERAS_COMPILE_ARGS', new_callable=PropertyMock) as mock_compile, \
-             patch.object(type(SaltupEnv), 'SALTUP_TRAINING_KERAS_FIT_ARGS', new_callable=PropertyMock) as mock_fit, \
-             patch.object(type(SaltupEnv), 'SALTUP_KERAS_TRAIN_SHUFFLE', new_callable=PropertyMock) as mock_shuffle, \
-             patch.object(type(SaltupEnv), 'SALTUP_KERAS_TRAIN_VERBOSE', new_callable=PropertyMock) as mock_verbose:
-             #patch('saltup.ai.training.train.convert_keras_to_onnx') as mock_onnx_conv, \
-             #patch('saltup.ai.training.train.tflite_conversion') as mock_tflite_conv:
-            
-            mock_compile.return_value = {}
-            mock_fit.return_value = {}
-            mock_shuffle.return_value = True
-            mock_verbose.return_value = 0
-            
-            #mock_onnx_conv.return_value = (Mock(), Mock())
-            #mock_tflite_conv.return_value = os.path.join(output_dir, "saved_models", "test_model_best.tflite")
-            
-            # Train the model with class weights
-            result = training(
-                train_DataGenerator=mock_keras_data_generator,
-                model=mock_keras_model,
-                loss_function=loss_function,
-                optimizer=optimizer,
-                epochs=1,
-                output_dir=output_dir,
-                kfold_param={'enable': False, 'split': [0.8, 0.2]},
-                model_output_name="test_model",
-                classification_class_weight={0: 1.0, 1: 2.0}
-            )
-            
-            # Assertions
-            assert result['kfolds'] is False
-            assert len(result['models_paths']) >= 1
+        # Assertions
+        assert result['kfolds'] is False
+        assert len(result['models_paths']) >= 1
 
 if __name__ == "__main__":
     pytest.main([__file__, "-v"])
