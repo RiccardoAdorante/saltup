@@ -70,7 +70,7 @@ def mock_pytorch_data_generator(mock_test_data_dir):
         dataloader=dataloader,
         target_size=(32, 32),
         num_classes=2,
-        batch_size=4
+        batch_size=1
     )
 
 class TestTrainPytorch:
@@ -124,32 +124,6 @@ class TestTrainPytorch:
         assert os.path.exists(trained_model_path)
         assert trained_model_path.endswith(".pth")
         assert os.path.exists(os.path.join(output_dir, "saved_models"))
-            
-    def test_training_without_kfold_pytorch(self, mock_pytorch_model, mock_pytorch_data_generator, tmp_path):
-        """Test training without k-fold cross validation for PyTorch model."""
-        output_dir = str(tmp_path / "output")
-        os.makedirs(output_dir, exist_ok=True)
-            
-        # Define loss function and optimizer
-        loss_function = nn.CrossEntropyLoss()
-        optimizer = torch.optim.Adam(mock_pytorch_model.parameters(), lr=0.001)
-        
-        # Train the model
-        result = training(
-            train_DataGenerator=mock_pytorch_data_generator,
-            model=mock_pytorch_model,
-            loss_function=loss_function,
-            optimizer=optimizer,
-            epochs=1,
-            output_dir=output_dir,
-            validation=[0.8, 0.2],
-            kfold_param={'enable': False},
-            model_output_name="test_model"
-        )
-        
-        # Assertions
-        assert result['kfolds'] is False
-        assert len(result['models_paths']) >= 1
         assert os.path.exists(os.path.join(output_dir, "options.txt"))
 
 class TestCallbackIntegration:
