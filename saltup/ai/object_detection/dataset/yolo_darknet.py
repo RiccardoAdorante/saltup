@@ -709,7 +709,7 @@ class YoloDataset(Dataset):
         ids = sorted(self._image_ids)  # Convert to sorted list
         return ids[:max_entries] if max_entries else ids
 
-    def check_integrity(self, stats: dict = None) -> bool:
+    def check_integrity(self, stats: dict = {None: []}) -> bool:
         """
         Check the integrity of the dataset.
         
@@ -835,7 +835,7 @@ def is_yolo_darknet_dataset(root_dir: Union[str, Path]) -> bool:
     # Count how many files have YOLO-format annotations
     yolo_format_count = 0
 
-    def _is_float_in_range(s: str, min_val: float, max_val: float) -> bool:
+    def _is_float_in_range(s: Union[str, float], min_val: float, max_val: float) -> bool:
         """Check if a string represents a float within the specified range."""
         try:
             val = float(s)
@@ -1004,7 +1004,7 @@ def analyze_dataset(root_dir: str, class_names: Optional[List[str]] = None) -> N
                 print(f"  * {class_name}: {count}")
 
 
-def read_label(label_file: Union[str, Path]) -> list:
+def read_label(label_file: Union[str, Path]) -> List[Tuple[int, float, float, float, float]]:
     """Parse YOLO Darknet format labels from a text file.
 
     Args:
@@ -1036,7 +1036,7 @@ def read_label(label_file: Union[str, Path]) -> list:
     return labels
 
 
-def write_label(label_file: str, annotations: Iterable[Union[list, tuple]], file_mode: str = 'w') -> None:
+def write_label(label_file: Union[str, Path], annotations: Iterable[Union[list, tuple]], file_mode: str = 'w') -> None:
     """Write object detection labels in YOLO format.
 
     Args:
@@ -1062,7 +1062,7 @@ def write_label(label_file: str, annotations: Iterable[Union[list, tuple]], file
             file.write(f'{" ".join(map(str, annotation))}\n')
 
 
-def list_all_labels(label_dir: str) -> List[str]:
+def list_all_labels(label_dir: str) -> List[List[Tuple[int, float, float, float, float]]]:
     """
     List all labels from text files in a directory.
     
@@ -1094,8 +1094,8 @@ def list_all_labels(label_dir: str) -> List[str]:
 def replace_label_class(
    old_class_id: int,
    new_class_id: int, 
-   label_dir: str = None, 
-   filepath_list: list = None,
+   label_dir: Optional[str] = None, 
+   filepath_list: Optional[list] = None,
    verbose: bool = False 
 ) -> tuple[int, list]:
    """Replace specified class ID in YOLO Darknet label files with a new ID.
@@ -1170,7 +1170,7 @@ def replace_label_class(
    return modified_count, modified_files
 
 
-def shift_class_ids(label_folder: str, shift_value: int, output_folder: str = None) -> None:
+def shift_class_ids(label_folder: str, shift_value: int, output_folder: Optional[str] = None) -> None:
     """Shift all class IDs in YOLO Darknet label files by a constant value.
 
     Args:
@@ -1248,8 +1248,8 @@ def convert_to_coco_annotations(image_dir: str, label_dir: str, classes: list[st
         if img_filename.endswith((".jpg", ".png")):
             img_id += 1
             img_path = os.path.join(image_dir, img_filename)
-            img = Image.open(img_path)
-            img_width, img_height = img.size
+            img = Image(img_path)
+            img_width, img_height = img.get_width(), img.get_height()
 
             # Add image to the COCO images array
             images.append({
@@ -1456,7 +1456,7 @@ def split_and_organize_dataset(
 
 def count_objects(
     labels_dir: str,
-    class_names: list = None,
+    class_names: Optional[list] = None,
     verbose: bool = False
 ) -> tuple[Dict[Union[int, str], int], int]:
     """Count labels instances and annotated images in YOLO dataset.
@@ -1538,19 +1538,19 @@ def create_symlinks_by_class(
         logger.warning(f"No label files found in {lbls_path}")
         return
 
-    # If no class names provided, use unique classes from label files
-    if class_names is None:
-        class_names = _extract_unique_classes(lbl_files)
-        logger.info(f"Extracted classes: {class_names}")
+    # # If no class names provided, use unique classes from label files
+    # if class_names is None:
+    #     class_names = _extract_unique_classes(lbl_files)
+    #     logger.info(f"Extracted classes: {class_names}")
 
-    # Create destination directory
-    dest_path.mkdir(parents=True, exist_ok=True)
+    # # Create destination directory
+    # dest_path.mkdir(parents=True, exist_ok=True)
 
-    # Create classes.names file
-    class_names_file = dest_path / 'classes.names'
-    with class_names_file.open('w') as f:
-        f.write('\n'.join(map(str, class_names)))
-    logger.info(f"Created classes file: {class_names_file}")
+    # # Create classes.names file
+    # class_names_file = dest_path / 'classes.names'
+    # with class_names_file.open('w') as f:
+    #     f.write('\n'.join(map(str, class_names)))
+    # logger.info(f"Created classes file: {class_names_file}")
 
     # Create labels map
     labels_map = _create_labels_map(lbl_files, class_names)
@@ -1559,7 +1559,7 @@ def create_symlinks_by_class(
     classes_with_files = set()
     for lbl_file in labels_map:
         # Get the actual image file path
-        img_file = Path(_find_matching_image(lbl_file.stem, str(imgs_path)))
+        img_file = _find_matching_image(lbl_file.stem, str(imgs_path))
         
         # Only count classes with both image and label files
         if img_file is not None and img_file.exists():
@@ -1577,7 +1577,7 @@ def create_symlinks_by_class(
     symlink_count = 0
     for lbl_file in labels_map:
         # Get actual paths for image and label files
-        img_file = Path(_find_matching_image(lbl_file.stem, str(imgs_path)))
+        img_file = _find_matching_image(lbl_file.stem, str(imgs_path))
         lbl_file = lbls_path / lbl_file.name
 
         if img_file is None or not img_file.exists():
@@ -1647,7 +1647,7 @@ def find_image_label_pairs(labels_dir: str, images_dir: str) -> Tuple[List[str],
     return matched_images, matched_labels, unmatched_labels
 
 
-def _extract_unique_classes(label_files: List[Path]) -> List[str]:
+def _extract_unique_classes(label_files: List[Path]) -> List[int]:
     """Extract unique classes from label files.
 
     Args:
@@ -1656,12 +1656,15 @@ def _extract_unique_classes(label_files: List[Path]) -> List[str]:
     Returns:
         List of unique class names
     """
-    return list({
-        int(label[0])
-        for file in label_files
-        for label in read_label(str(file))
-    })
-
+    seen = set()
+    unique_classes = []
+    for file in label_files:
+        for label in read_label(file):
+            class_id = int(label[0])
+            if class_id not in seen:
+                seen.add(class_id)
+                unique_classes.append(class_id)
+    return unique_classes
 
 def _create_labels_map(
    lbl_files: List[Path], 
@@ -1728,7 +1731,7 @@ def _image_per_class_id(labels_dir: str, images_dir: str) -> dict:
     return class_to_images
 
 
-def _find_matching_image(base_name: str, images_dir: str) -> Optional[Path]:
+def _find_matching_image(base_name: str, images_dir: Union[str, Path]) -> Optional[Path]:
     """Find matching image file for a given base name.
     
     Args:
@@ -1745,7 +1748,7 @@ def _find_matching_image(base_name: str, images_dir: str) -> Optional[Path]:
     return None
 
 
-def _find_matching_label(base_name: str, labels_dir: str) -> Optional[Path]:
+def _find_matching_label(base_name: str, labels_dir: Union[str, Path]) -> Optional[Path]:
     """Find matching label file for a given base name.
     
     Args:
