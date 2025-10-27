@@ -20,6 +20,7 @@ Key functions:
 - Dataset splitting
 """
 
+import io
 import os
 import json
 import shutil
@@ -31,8 +32,10 @@ from pathlib import Path
 from collections import defaultdict, OrderedDict
 from typing import Dict, List, Tuple, Optional, Union
 
-from saltup.utils.data.s3.s3_utils import S3
 from botocore.exceptions import ClientError
+from PIL import Image as PILImage
+
+from saltup.utils.data.s3.s3_utils import S3
 from saltup.utils.data.image.image_utils import Image
 from saltup.ai.object_detection.utils.bbox import BBox, BBoxClassId, BBoxFormat
 from saltup.ai.base_dataformat.base_dataloader import BaseDataloader, ColorMode
@@ -42,8 +45,8 @@ from saltup.utils.configure_logging import logging
 class COCOLoader(BaseDataloader):
     def __init__(
         self,
-        images_dir: str,
-        annotations_file: str,
+        images_dir: Union[str, Path],
+        annotations_file: Union[str, Path],
         color_mode: ColorMode = ColorMode.RGB
     ):
         """
@@ -83,23 +86,23 @@ class COCOLoader(BaseDataloader):
         self._current_index = 0  # Reset position when creating new iterator
         return self
 
-    def __next__(self) -> Tuple[Image, List[BBoxClassId]]:
+    def __next__(self) -> Tuple[Path, Image, List[BBoxClassId]]:
         """Get next item from dataset."""
         if self._current_index >= len(self.image_annotation_pairs):
             self._current_index = 0  # Reset for next iteration
             raise StopIteration
         
-        image, annotations = self._load_item(self._current_index)
-        self._current_index += 1        
-        return image, annotations
+        image_path, image, annotations = self._load_item(self._current_index)
+        self._current_index += 1
+        return image_path, image, annotations
 
     def __len__(self):
         """Return total number of samples in dataset."""
         return len(self.image_annotation_pairs)
     
     def __getitem__(self, idx: Union[int, slice]) -> Union[
-        Tuple[Image, List[BBoxClassId]],
-        List[Tuple[Image, List[BBoxClassId]]]
+        Tuple[Path, Image, List[BBoxClassId]],
+        List[Tuple[Path, Image, List[BBoxClassId]]]
     ]:
         """Get item(s) by index.
         
@@ -107,7 +110,7 @@ class COCOLoader(BaseDataloader):
             idx: Integer index or slice object
             
         Returns:
-            Single (image, annotations) tuple or list of tuples if slice
+            Single (image_path, image, annotations) tuple or list of tuples if slice
             
         Raises:
             IndexError: If index out of range
@@ -119,13 +122,10 @@ class COCOLoader(BaseDataloader):
         else:
             # Handle single index
             return self._load_item(idx)
-    
-    def _load_item(self, idx: int) -> Tuple[Image, List[BBoxClassId]]:
+
+    def _load_item(self, idx: int) -> Tuple[Path, Image, List[BBoxClassId]]:
         """Load single item by index.
-
-        Unlike YOLO and Pascal VOC, we do not need to load and parse annotation files
-        because the annotations have already been processed in _create_image_annotation_pairs().
-
+        
         Args:
             idx: Index of the item to load
 
@@ -142,8 +142,8 @@ class COCOLoader(BaseDataloader):
             
         image_path, annotations = self.image_annotation_pairs[idx]
         image = self.load_image(image_path, self.color_mode)
-        
-        return image, annotations
+
+        return image_path, image, annotations
 
     def _load_annotations(self) -> Dict:
         """Load COCO annotations from JSON file."""
@@ -172,7 +172,7 @@ class COCOLoader(BaseDataloader):
         """Merge multiple COCO datasets into one."""
         raise NotImplementedError("Merging COCO datasets is not implemented yet")
     
-    def _create_image_annotation_pairs(self) -> List[Tuple[str, List[Dict]]]:
+    def _create_image_annotation_pairs(self) -> List[Tuple[Path, List[BBoxClassId]]]:
         """
         Create pairs of image paths and their corresponding annotations.
         
@@ -215,8 +215,8 @@ class COCOLoader(BaseDataloader):
 class COCOS3Loader(BaseDataloader):
     def __init__(
         self,
-        images_dir: str,
-        annotations_file: str,
+        images_dir: Union[str, Path],
+        annotations_file: Union[str, Path],
         s3_client: S3,
         download_file: bool = False,
         max_files: int = -1,
@@ -230,6 +230,7 @@ class COCOS3Loader(BaseDataloader):
             annotations_file: Local path to COCO annotations JSON file
             s3_client: Initialized S3 client for accessing S3 bucket
             download_file: Whether to download files from S3 if not present locally
+            max_files: Maximum number of files to download from S3
             color_mode: Color mode for loading images
 
         Raises:
@@ -264,7 +265,7 @@ class COCOS3Loader(BaseDataloader):
         self._current_index = 0  # Reset position when creating new iterator
         return self
 
-    def __next__(self) -> Tuple[str, Image, List[BBoxClassId]]:
+    def __next__(self) -> Tuple[Path, Optional[Image], List[BBoxClassId]]:
         """Get next item from dataset."""
         if self._current_index >= len(self.image_annotation_pairs):
             self._current_index = 0  # Reset for next iteration
@@ -279,8 +280,8 @@ class COCOS3Loader(BaseDataloader):
         return len(self.image_annotation_pairs)
     
     def __getitem__(self, idx: Union[int, slice]) -> Union[
-        Tuple[str, Image, List[BBoxClassId]],
-        List[Tuple[str, Image, List[BBoxClassId]]]
+        Tuple[Path, Optional[Image], List[BBoxClassId]],
+        List[Tuple[Path, Optional[Image], List[BBoxClassId]]]
     ]:
         """Get item(s) by index.
         
@@ -301,7 +302,26 @@ class COCOS3Loader(BaseDataloader):
             # Handle single index
             return self._load_item(idx)
 
-    def _load_item(self, idx: int) -> Tuple[str, Image, List[BBoxClassId]]:
+    def get_image_shape(self, idx: int) -> Tuple[int, int]:
+        """Get the shape of the image at the specified index.
+
+        Args:
+            idx: Index of the image
+
+        Returns:
+            Tuple of (height, width) of the image
+
+        Raises:
+            IndexError: If index out of range
+        """
+        # Get only the first 1 KB
+        resp = self.s3_client._client.get_object(Bucket=self.s3_client._bucket_name, Key=str(self.image_annotation_pairs[idx][0]), Range="bytes=0-1023")
+        data = resp["Body"].read()
+        # Try opening the image
+        with PILImage.open(io.BytesIO(data)) as img:
+            return img.height, img.width
+
+    def _load_item(self, idx: int) -> Tuple[Path, Optional[Image], List[BBoxClassId]]:
         """Load single item by index.
 
         Args:
@@ -322,25 +342,22 @@ class COCOS3Loader(BaseDataloader):
         if self.download_file and self.downloaded_files < self.max_files:
             
             with tempfile.TemporaryDirectory() as tmpdirname:
-                print('created temporary directory', tmpdirname)
-                
                 try:
                     self.s3_client.download_file(
-                        file_path=image_path,
+                        file_path=str(image_path),
                         destination_path=tmpdirname
                     )
-                    self.logger.info(f"Downloaded {image_path} to {tmpdirname}")
                     self.downloaded_files += 1
                 except ClientError as e:
-                    self.logger.error(f"Failed to download {image_path} from S3: {str(e)}")
+                    self.logger.error(f"Error downloading {image_path} from S3: {str(e)}")
                     image = None
                     raise
                 image = self.load_image(os.path.join(tmpdirname, os.path.basename(image_path)), self.color_mode)
         else:
             image = None
         full_image_path = os.path.join("s3://", self.s3_client._bucket_name, image_path)
-        
-        return full_image_path, image, annotations
+
+        return Path(full_image_path), image, annotations
 
     def _load_annotations(self) -> Dict:
         """Load COCO annotations from JSON file."""
@@ -373,7 +390,7 @@ class COCOS3Loader(BaseDataloader):
         """Merge multiple COCO datasets into one."""
         raise NotImplementedError("Merging COCO datasets is not implemented yet")
 
-    def _create_image_annotation_pairs(self) -> List[Tuple[str, List[Dict]]]:
+    def _create_image_annotation_pairs(self) -> List[Tuple[Path, List[BBoxClassId]]]:
         """
         Create pairs of image paths and their corresponding annotations for S3.
 
@@ -568,7 +585,7 @@ def get_dataset_paths(root_dir: str) -> Tuple[
     )
 
 
-def analyze_dataset(root_dir: str, class_names: List[str] = None):
+def analyze_dataset(root_dir: str, class_names: List[str] = []) -> None:
     """Analyze COCO dataset structure and annotations.
     
     Args:
@@ -635,8 +652,8 @@ def write_annotations(annotations: Dict, output_path: str) -> None:
 def replace_annotations_class(
     old_class_id: int,
     new_class_id: int,
-    coco_json: str,  
-    output_json: str = None,
+    coco_json: str,
+    output_json: Optional[str] = None,
     verbose: bool = False
 ) -> tuple[int, Dict]:
     """Replace specified category ID in COCO annotations with a new ID.
@@ -692,9 +709,9 @@ def replace_annotations_class(
 
 
 def shift_class_ids(
-    coco_json: str, 
-    shift_value: int, 
-    output_json: str = None
+    coco_json: str,
+    shift_value: int,
+    output_json: Optional[str] = None
 ) -> Dict:
     """Shift all category IDs in COCO annotations by a constant value.
 
@@ -738,7 +755,7 @@ def shift_class_ids(
 
 def convert_coco_to_yolo_labels(
     coco_json: str,
-    output_dir: str = None
+    output_dir: Optional[str] = None
 ) -> Dict[str, List]:
     """Convert COCO annotations to YOLO format.
     

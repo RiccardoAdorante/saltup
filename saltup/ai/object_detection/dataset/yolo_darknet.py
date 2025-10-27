@@ -1,3 +1,4 @@
+import io
 from PIL import Image
 import os
 import json
@@ -5,6 +6,8 @@ import random
 import shutil
 import numpy as np
 from tqdm import tqdm
+from PIL import Image as PILImage
+from botocore.exceptions import ClientError
 import tempfile
 from pathlib import Path
 from collections import defaultdict, Counter, OrderedDict
@@ -12,7 +15,7 @@ from typing import Iterable, Union, List, Dict, Optional, Tuple, Set
 
 from saltup.utils.data.image.image_utils import Image
 from saltup.utils.data.s3.s3_utils import S3, list_files_by_date
-from botocore.exceptions import ClientError
+
 from saltup.ai.object_detection.utils.bbox import BBox, BBoxClassId, BBoxFormat
 from saltup.ai.base_dataformat.base_dataloader import BaseDataloader, ColorMode
 from saltup.ai.base_dataformat.base_dataset import Dataset
@@ -278,7 +281,7 @@ class YoloDarknetS3Loader(BaseDataloader):
 
         image_path, label_path = self.image_label_pairs[idx]
 
-        if self.downloaded_files < self.max_files:
+        if self.download_file and self.downloaded_files < self.max_files:
             with tempfile.TemporaryDirectory() as tmpdirname:
                 print('created temporary directory', tmpdirname)
                 
@@ -287,7 +290,6 @@ class YoloDarknetS3Loader(BaseDataloader):
                         file_path=image_path,
                         destination_path=tmpdirname
                     )
-                    self.__logger.info(f"Downloaded {image_path} to {tmpdirname}")
                     self.downloaded_files += 1
                 except ClientError as e:
                     self.__logger.error(f"Failed to download {image_path} from S3: {str(e)}")
@@ -297,8 +299,8 @@ class YoloDarknetS3Loader(BaseDataloader):
                 image_width, image_height = image.get_width(), image.get_height()
                 
         else:
-            image = None
-            image_width, image_height = None, None
+            image_height, image_width = self._update_s3_image_dimensions(self.s3_client._bucket_name,
+                                                                         image_path)
             
         with tempfile.TemporaryDirectory() as tmpdirname:
             print('created temporary directory', tmpdirname)
@@ -325,7 +327,75 @@ class YoloDarknetS3Loader(BaseDataloader):
 
         image_path = os.path.join("s3://", self.s3_client._bucket_name, image_path)
         return image_path, image, annotations
-
+    
+    def _update_s3_image_dimensions(
+        self,
+        bucket_name: str,
+        key: str,
+    ) -> tuple[int | None, int | None]:
+        """
+        Update S3 object dimensions in metadata if missing.
+        Returns (width, height) tuple.
+        
+        Args:
+            s3_client: S3 client instance
+            bucket_name: S3 bucket name
+            key: S3 object key
+        """
+        
+        # Get S3 object metadata
+        try:
+            head_response = self.s3_client._client.head_object(Bucket=bucket_name, Key=key)
+            s3_metadata = head_response.get('Metadata', {})
+            
+            # Check if dimensions already exist in S3 metadata
+            existing_width = s3_metadata.get('width')
+            existing_height = s3_metadata.get('height')
+            
+            if existing_width and existing_height:
+                # Convert to int if they're strings
+                try:
+                    width = int(existing_width)
+                    height = int(existing_height)
+                    
+                    return width, height
+                except (ValueError, TypeError):
+                    pass
+        
+        except Exception as e:
+            print(f"⚠️ Failed to get S3 metadata for {key}: {e}")
+            return None, None
+        
+        # Check if it's an image file by extension
+        if not key.lower().endswith(('.jpg', '.jpeg', '.png', '.gif', '.bmp', '.tiff')):
+            return None, None
+        
+        try:
+            from PIL import Image
+            import io
+            
+            # Download just the image headers (first 4KB should be enough for most images)
+            try:
+                response = self.s3_client._client.get_object(
+                    Bucket=bucket_name, 
+                    Key=key, 
+                    Range="bytes=0-4095"
+                )
+                
+                # Get image dimensions from header
+                img_data = io.BytesIO(response['Body'].read())
+                img = Image.open(img_data)
+                width, height = img.size
+                
+                return width, height
+            except Exception as e:
+                print(f"⚠️ Failed to get image dimensions from S3 object {key}: {e}")
+                return None, None
+            
+        except Exception as e:
+            print(f"⚠️ Failed to get dimensions for S3 object {key}: {e}")
+            return None, None
+        
     def __len__(self):
         """Return total number of samples in dataset."""
         return len(self.image_label_pairs)

@@ -1,18 +1,19 @@
+from pathlib import Path
 from saltup.ai.base_dataformat.base_dataloader import BaseDataloader
 from saltup.utils.data.image.image_utils import Image
 
 
-from typing import List, Tuple, Union
+from typing import Any, List, Optional, Tuple, Union
 from glob import glob
 import os
 import random
 import numpy as np
 
 class ClassificationDataloader(BaseDataloader):
-    def __init__(self, source:Union[str,List[List]], classes_dict:dict={}, img_size:Tuple=(), extensions:str='jpg'):
+    def __init__(self, source:Union[str,Tuple[List[Union[str, Path]], List[int]]], classes_dict:dict={}, img_size:Tuple=(), extensions:str='jpg'):
         """
         Args:
-            source (Union[str,List[List]]): Root directory containing subfolders per class or a list of image paths and labels.
+            source (Union[str,List[List[str]]]): Root directory containing subfolders per class or a list of image paths and labels.
             classes_dict (dict): Dictionary mapping class names to indices (optional)
             img_size (tuple): Image size (H, W, C) for preallocation (optional)
             extensions (tuple): Allowed image extensions
@@ -25,10 +26,10 @@ class ClassificationDataloader(BaseDataloader):
         self.extensions = extensions
         
         if isinstance(source, list):
-            # If source is a list, assume it contains image paths and labels
-            self.image_paths = source[0]
-            self.labels = source[1]
-            self.root_dir = None
+            if len(source) >= 2:
+                self.image_paths = list(source[0])
+                self.labels = [int(label) for label in source[1]]
+            self.root_dir = ""
         else:
             self.image_paths = []
             self.labels = []
@@ -59,12 +60,12 @@ class ClassificationDataloader(BaseDataloader):
                 self.labels.extend([self.class_to_idx[class_name]] * len(files))
         
     def __getitem__(self, idx):
-        img_path = self.image_paths[idx]
+        img_path = str(self.image_paths[idx])
         label = self.labels[idx]
         image = Image(img_path)
         img = image.get_data()
         
-        return img, label
+        return img_path, img, label
     
     def get_num_samples_per_class(self):
         """
@@ -75,14 +76,14 @@ class ClassificationDataloader(BaseDataloader):
         """
         num_samples = {class_name: 0 for class_name in self.class_to_idx.keys()}
         for label in self.labels:
-            class_name = self.idx_to_class[label]
+            class_name = self.idx_to_class[int(label)]
             num_samples[class_name] += 1
         return num_samples
-    
-    def get_image_paths(self):
+
+    def get_image_paths(self) -> List[Union[str, Path]]:
         return self.image_paths
-    
-    def get_labels(self):
+
+    def get_labels(self) -> List[int]:
         return self.labels
 
     def split(self, ratios:List[float]=[0.2, 0.8]) -> List['ClassificationDataloader']:
@@ -155,9 +156,9 @@ class ClassificationDataloader(BaseDataloader):
             combined = list(zip(split_image_paths[split_idx], split_labels[split_idx]))
             random.shuffle(combined)
             current_image_paths, current_labels = zip(*combined) if combined else ([], [])
-            
+            source_tuple: Tuple[List[Union[str, Path]], List[int]] = (list(current_image_paths), list(current_labels))
             current_dataloader = ClassificationDataloader(
-                source=[list(current_image_paths), list(current_labels)],
+                source=source_tuple,
                 classes_dict=self.get_classes(),
                 img_size=self.get_img_size(),
                 extensions=self.get_extensions()
@@ -212,12 +213,16 @@ class ClassificationDataloader(BaseDataloader):
         # Check that classes match
         if dl1.get_classes() != dl2.get_classes():
             raise ValueError("Class dictionaries do not match and cannot be merged.")
-        
-        list_images_paths = dl1.get_image_paths() + dl2.get_image_paths()
-        list_labels = dl1.get_labels() + dl2.get_labels()
-        
+
+        # Type the variables first
+        list_images_paths: List[Union[str, Path]] = dl1.get_image_paths() + dl2.get_image_paths()
+        list_labels: List[int] = dl1.get_labels() + dl2.get_labels()
+
+        # Create source with proper type
+        merged_source: Tuple[List[Union[str, Path]], List[int]] = (list_images_paths, list_labels)
+
         merged = ClassificationDataloader(
-            source=[list_images_paths, list_labels],
+            source=merged_source,
             classes_dict=dl1.get_classes(),
             img_size=dl1.get_img_size(),
             extensions=dl1.get_extensions()
@@ -253,7 +258,7 @@ class ClassificationDataloader(BaseDataloader):
         
         class_counts = {}
         for label in self.labels:
-            class_name = self.idx_to_class[label]
+            class_name = self.idx_to_class[int(label)]
             class_counts[class_name] = class_counts.get(class_name, 0) + 1
         
         class_distribution = {}
@@ -279,7 +284,7 @@ class ClassificationDataloader(BaseDataloader):
             print(f"{class_name:20}: {count:6} samples ({percentage:5.1f}%)")
     
     @staticmethod
-    def compare_distributions(dataloaders: List['ClassificationDataloader'], titles: List[str] = None):
+    def compare_distributions(dataloaders: List['ClassificationDataloader'], titles: List[str] = []):
         """
         Compare class distributions across multiple dataloaders.
         

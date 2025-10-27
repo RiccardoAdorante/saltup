@@ -4,7 +4,7 @@ import boto3
 import configparser
 import re
 from datetime import datetime, time
-from typing import Union, Iterable, List
+from typing import Union, Iterable, List, Optional
 
 from saltup.utils.misc import match_patterns
 
@@ -17,8 +17,8 @@ class S3:
     def __init__(
         self, 
         bucket_name:str , 
-        aws_access_key_id:str =None, 
-        aws_secret_access_key:str =None, 
+        aws_access_key_id:Optional[str] =None, 
+        aws_secret_access_key:Optional[str] =None, 
         aws_credential_filepath:str ="~/.aws/credentials", 
         section: str='default'
     ):
@@ -38,7 +38,7 @@ class S3:
                                     from. Defaults to 'default'.
         """
         self._aws_access_key_id, self._aws_secret_access_key = self._get_aws_credentials(
-            aws_access_key_id, aws_secret_access_key, aws_credential_filepath, section
+            str(aws_access_key_id), str(aws_secret_access_key), str(aws_credential_filepath), str(section)
         )
         self._bucket_name = bucket_name
 
@@ -124,6 +124,7 @@ class S3:
         """
         Returns the AWS credentials.
         """
+        return self._aws_access_key_id, self._aws_secret_access_key
 
     def download_file(
         self, 
@@ -166,13 +167,14 @@ class S3:
                 if attempt == retries - 1:
                     logging.error(f"Failed to download file '{file_path}' after {retries} attempts.")
                     return False
-
+        return False
+    
     def download_files_from_folder(
         self, 
         folder_path: str, 
         destination_path: str,
         max_files: int = -1,
-        patterns: Union[str, Iterable[Union[str, List[str]]]] = None, 
+        patterns: Optional[Union[str, Iterable[Union[str, List[str]]]]] = None,
         overwrite: bool = True, 
         retries: int = 3
     ):
@@ -214,7 +216,7 @@ class S3:
         self, 
         s3_folder: str, 
         local_dir: str, 
-        patterns: Union[str, Iterable[Union[str, List[str]]]] = None, 
+        patterns: Optional[Union[str, Iterable[Union[str, List[str]]]]] = None, 
         overwrite: bool = True, 
         retries: int = 3
     ):
@@ -263,7 +265,7 @@ class S3:
     def ls(
         self, 
         s3_folder: str = './', 
-        patterns: Union[str, Iterable[Union[str, List[str]]]] = None, 
+        patterns: Optional[Union[str, Iterable[Union[str, List[str]]]]] = None, 
         only_basename: bool = True
     ):
         """
@@ -331,9 +333,9 @@ class S3:
 def list_files_by_date(
     s3_instance,
     s3_folder: str = './',
-    start_date: Union[str, datetime] = None,
-    end_date: Union[str, datetime] = None,
-    patterns: Union[str, Iterable[Union[str, List[str]]]] = None,
+    start_date: Optional[Union[str, datetime]] = None,
+    end_date: Optional[Union[str, datetime]] = None,
+    patterns: Optional[Union[str, Iterable[Union[str, List[str]]]]] = None,
     only_basename: bool = True
 ) -> List[str]:
     """
@@ -410,9 +412,9 @@ def list_files_by_date(
 def list_files_by_time(
     s3_instance,
     s3_folder: str = './',
-    start_time: Union[str, time] = None,
-    end_time: Union[str, time] = None,
-    patterns: Union[str, Iterable[Union[str, List[str]]]] = None,
+    start_time: Optional[Union[str, time]] = None,
+    end_time: Optional[Union[str, time]] = None,
+    patterns: Optional[Union[str, Iterable[Union[str, List[str]]]]] = None,
     only_basename: bool = True
 ) -> List[str]:
     """

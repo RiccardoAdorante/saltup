@@ -157,6 +157,8 @@ class BBoxFormat(IntEnum):
             return "PASCAL VOC (absolute x1, y1, x2, y2)"
         else:
             raise ValueError(f"Unknown BBoxFormat: {self}")
+        
+    @classmethod
     def from_string(cls, s: str):
         """Convert a human-readable string to a BBoxFormat enum."""
         s = s.lower()
@@ -1101,13 +1103,14 @@ class BBox:
             "img_height": self.img_height,
             "img_width": self.img_width
         }
-        
+
+    @classmethod
     def from_json(cls, data):
         return cls(
-            coordinates = data["coordinates"],
-            fmt = BBoxFormat.from_string(data["fmt"]),
-            img_height = data["img_height"],
-            img_width = data["img_width"]
+            coordinates=data["coordinates"],
+            fmt=BBoxFormat.from_string(data["fmt"]),
+            img_height=data["img_height"],
+            img_width=data["img_width"]
         )
         
     def __repr__(self):
@@ -1137,8 +1140,8 @@ class BBoxClassId(BBox):
         class_id: int,
         class_name: Optional[str] = None,
         fmt: BBoxFormat = BBoxFormat.YOLO,
-        img_height: int = None,
-        img_width: int = None
+        img_height: Optional[int] = None,
+        img_width: Optional[int] = None
     ):
         """
         Initializes a bounding box object with image dimensions, coordinates, class ID, and class name.
