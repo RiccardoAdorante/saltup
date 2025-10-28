@@ -240,7 +240,7 @@ class PascalVOCS3Loader(BaseDataloader):
         self._current_index = 0  # Reset position when creating new iterator
         return self
 
-    def __next__(self) -> Tuple[Path, Optional[Image], List[BBoxClassId]]:
+    def __next__(self) -> Tuple[Union[Path, str], Optional[Image], List[BBoxClassId]]:
         """Get next item from dataset."""
         if self._current_index >= len(self.image_annotation_pairs):
             self._current_index = 0  # Reset for next iteration
@@ -255,8 +255,8 @@ class PascalVOCS3Loader(BaseDataloader):
         return len(self.image_annotation_pairs)
     
     def __getitem__(self, idx: Union[int, slice]) -> Union[
-        Tuple[Path, Optional[Image], List[BBoxClassId]],
-        List[Tuple[Path, Optional[Image], List[BBoxClassId]]]
+        Tuple[Union[Path, str], Optional[Image], List[BBoxClassId]],
+        List[Tuple[Union[Path, str], Optional[Image], List[BBoxClassId]]]
     ]:
         """Get item(s) by index.
         
@@ -277,7 +277,7 @@ class PascalVOCS3Loader(BaseDataloader):
             # Handle single index
             return self._load_item(idx)
 
-    def _load_item(self, idx: int) -> Tuple[Path, Optional[Image], List[BBoxClassId]]:
+    def _load_item(self, idx: int) -> Tuple[Union[Path, str], Optional[Image], List[BBoxClassId]]:
         """Load single item by index.
         
         Args:
@@ -329,7 +329,7 @@ class PascalVOCS3Loader(BaseDataloader):
             temp_annotation_path = os.path.join(tmpdirname, os.path.basename(annotation_path))
             annotations = read_annotation(temp_annotation_path)
         image_path = os.path.join("s3://", self.s3_client._bucket_name, image_path)
-        return Path(image_path), image, annotations
+        return image_path, image, annotations
 
     def split(self, ratio):
         """Split dataset into subsets based on given ratio."""

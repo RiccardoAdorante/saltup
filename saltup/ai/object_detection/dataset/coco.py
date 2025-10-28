@@ -265,7 +265,7 @@ class COCOS3Loader(BaseDataloader):
         self._current_index = 0  # Reset position when creating new iterator
         return self
 
-    def __next__(self) -> Tuple[Path, Optional[Image], List[BBoxClassId]]:
+    def __next__(self) -> Tuple[Union[Path, str], Optional[Image], List[BBoxClassId]]:
         """Get next item from dataset."""
         if self._current_index >= len(self.image_annotation_pairs):
             self._current_index = 0  # Reset for next iteration
@@ -280,8 +280,8 @@ class COCOS3Loader(BaseDataloader):
         return len(self.image_annotation_pairs)
     
     def __getitem__(self, idx: Union[int, slice]) -> Union[
-        Tuple[Path, Optional[Image], List[BBoxClassId]],
-        List[Tuple[Path, Optional[Image], List[BBoxClassId]]]
+        Tuple[Union[Path, str], Optional[Image], List[BBoxClassId]],
+        List[Tuple[Union[Path, str], Optional[Image], List[BBoxClassId]]]
     ]:
         """Get item(s) by index.
         
@@ -302,7 +302,7 @@ class COCOS3Loader(BaseDataloader):
             # Handle single index
             return self._load_item(idx)
 
-    def _load_item(self, idx: int) -> Tuple[Path, Optional[Image], List[BBoxClassId]]:
+    def _load_item(self, idx: int) -> Tuple[Union[Path, str], Optional[Image], List[BBoxClassId]]:
         """Load single item by index.
 
         Args:
@@ -338,7 +338,7 @@ class COCOS3Loader(BaseDataloader):
             image = None
         full_image_path = os.path.join("s3://", self.s3_client._bucket_name, image_path)
 
-        return Path(full_image_path), image, annotations
+        return full_image_path, image, annotations
 
     def _load_annotations(self) -> Dict:
         """Load COCO annotations from JSON file."""
