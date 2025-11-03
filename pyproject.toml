@@ -11,42 +11,92 @@ requires-python = ">=3.6"
 authors = [
     { name = "Marco Garzola" },
     { name = "Francesco Sonnessa" },
-    { name = "Marc Randriatsimiovalaza" }
+    { name = "Marc Randriatsimiovaloza" }
 ]
 keywords = ["AI", "deep learning", "computer vision", "YOLO"]
 license = { text = "MIT" }
+
+# DIPENDENZE COMPLETE (versione normale - backward compatibility)
+# Include tutte le funzionalità: dataset loaders, training, inferenza, conversione modelli
 dependencies = [
-    "cmsisdsp",
+    # === CORE DEPENDENCIES (anche in versione lite) ===
+    # Manipolazione dati e immagini
     "pillow",
-    "matplotlib",
-    "seaborn",
+    "opencv-python",
+    "numpy",
     "pandas",
     "scipy",
     "pyarrow",
     "fastparquet",
-    "opencv-python",
-    "boto3",
-    "tf2onnx==1.16.1",
-    "onnx",
+    
+    # Cloud & Utilities
+    "boto3",           # S3 access
+    "tqdm",            # Progress bars
+    "toml",
+    "dotmap",
+    
+    # Visualizzazione
+    "matplotlib",
+    "seaborn",
+    
+    # === ML FRAMEWORKS (solo versione completa) ===
+    # Deep Learning Frameworks
     "tensorflow==2.18.0",
     "keras",
-    "onnx2torch",
     "torch",
     "torchvision",
     "torchaudio",
+    
+    # ONNX Runtime & Conversion
     "onnxruntime-gpu",
+    "onnx",
+    "tf2onnx==1.16.1",
+    "onnx2torch",
+    
+    # Data Augmentation
     "albumentations",
-    "tqdm",
-    "toml",
-    "dotmap",
+    
+    # Experiment Tracking
+    "mlflow",
+    
+    # Audio Processing
+    "librosa",
+    "soundfile",
+    "cmsisdsp",
+    
+    # Development & IoT
     "IPython",
     "ipykernel",
     "nbformat",
     "paho-mqtt",
-    "mlflow",
-    "librosa",
-    "soundfile",
     "pytest"
+]
+
+# DIPENDENZE OPZIONALI
+[project.optional-dependencies]
+
+# Versione LITE: Solo data processing, dataset loaders, utilities
+# Riduzione dimensioni: ~4GB → ~200MB (95% riduzione)
+# Use cases: ETL, data preprocessing, dataset analysis, S3 sync
+lite = [
+    # Manipolazione dati e immagini
+    "pillow",
+    "opencv-python",
+    "numpy",
+    "pandas",
+    "scipy",
+    "pyarrow",
+    "fastparquet",
+    
+    # Cloud & Utilities
+    "boto3",           # S3 access
+    "tqdm",            # Progress bars
+    "toml",
+    "dotmap",
+    
+    # Visualizzazione
+    "matplotlib",
+    "seaborn",
 ]
 
 [project.scripts]

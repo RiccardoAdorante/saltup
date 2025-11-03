@@ -8,8 +8,9 @@ saltup.egg-info
 *.code-workspace
 
 # Custom files
-.tmp
+*.tmp
 .aider*
+CLAUDE.md
 
 # Test and sample models
 test/ai/nn_manager/sample_models/*

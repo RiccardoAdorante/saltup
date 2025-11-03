@@ -23,17 +23,36 @@ source saltup-env/bin/activate
 saltup-env\Scripts\activate
 ```
 
-## Repository Installation in the Active Python Environment
+## Installation Options
 
-Install directly from GitHub:
+### Full Installation (Default - ~4GB)
+All features including ML training, inference, and model conversion:
 ```bash
 pip install git+https://github.com/freedreamer82/saltup.git
 ```
 
-For development:
+### Lite Installation (~200MB - 95% smaller)
+Data processing and dataset utilities without ML frameworks:
+```bash
+pip install "saltup[lite] @ git+https://github.com/freedreamer82/saltup.git"
+```
+
+**Lite includes:** Dataset loaders (YOLO, COCO, Pascal VOC), S3 integration, image/video processing, bbox operations, dataset analysis.  
+**Full adds:** Model training/inference (TensorFlow, PyTorch, ONNX), data augmentation, experiment tracking.
+
+## Development Installation
+
+For development with all features:
 ```bash
 git clone https://github.com/freedreamer82/saltup.git
 cd saltup && ./makePackage.sh -d
+```
+
+For lightweight development (data processing only):
+```bash
+git clone https://github.com/freedreamer82/saltup.git
+cd saltup
+pip install -e .[lite]
 ```
 
 ## The Magic
