@@ -121,7 +121,7 @@ def analyze_layer_sensitivity(
     print(f"Expected input shape: {model_input.shape} (N, {height}, {width}, {channels})")
 
     calibration_imgs = np.zeros((num_samples, height, width, channels), dtype=np.float32)
-    for cnt, (image, _) in enumerate(calibration_dataloader):
+    for cnt, (_, image, _) in enumerate(calibration_dataloader):
         if cnt >= num_samples:
             break
         if preprocess_fn:

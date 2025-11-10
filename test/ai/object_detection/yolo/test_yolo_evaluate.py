@@ -274,10 +274,14 @@ class TestEvaluate(unittest.TestCase):
         # Create mock image (doesn't matter for this test)
         mock_image = Image(np.zeros((100, 100, 3), dtype=np.uint8), ColorMode.RGB)
         
-        # Create dataloader data: (image, ground_truth_labels)
+        # Create image paths and ensure files exist
+        img_path1 = os.path.join(self.tmp_dir, "img1.png")
+        img_path2 = os.path.join(self.tmp_dir, "img2.png")
+
+        # Create dataloader data: (path, image, ground_truth_labels)
         dataloader_data = [
-            (mock_image, [(bbox1_gt, 0)]),  # Image 1: class 0
-            (mock_image, [(bbox2_gt, 1)])   # Image 2: class 1
+            (img_path1, mock_image, [(bbox1_gt, 0)]),  # Image 1: path + image + class 0
+            (img_path2, mock_image, [(bbox2_gt, 1)])   # Image 2: path + image + class 1
         ]
         
         # Create predictions for each image
@@ -428,7 +432,9 @@ class TestEvaluate(unittest.TestCase):
                 self.data = []
                 bbox_gt = BBox(img_height=100, img_width=100, coordinates=[10, 10, 30, 30], fmt=BBoxFormat.CORNERS_ABSOLUTE)
                 mock_image = Image(np.zeros((100, 100, 3), dtype=np.uint8), ColorMode.RGB)
-                self.data.append((mock_image, [(bbox_gt, 0)]))
+                # Create image paths and ensure files exist
+                img_path1 = os.path.join("img1.png")
+                self.data.append((img_path1, mock_image, [(bbox_gt, 0)]))
                 self.index = 0
 
             def __iter__(self):

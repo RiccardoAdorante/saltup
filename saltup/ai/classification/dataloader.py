@@ -24,8 +24,8 @@ class ClassificationDataloader(BaseDataloader):
         
         self.img_size = img_size
         self.extensions = extensions
-        
-        if isinstance(source, list):
+
+        if isinstance(source, tuple):
             if len(source) >= 2:
                 self.image_paths = list(source[0])
                 self.labels = [int(label) for label in source[1]]

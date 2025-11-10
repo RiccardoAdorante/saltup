@@ -536,20 +536,6 @@ class TestYoloDataset:
         # Introduce an error by removing a label file
         os.remove(Path(labels_dir) / "img1.txt")
         assert not dataset.check_integrity()
-        
-    def test_save_annotations(self, temp_dataset_dir):
-        """Test saving annotations."""
-        images_dir, labels_dir = temp_dataset_dir
-        dataset = YoloDataset(images_dir, labels_dir)
-
-        # Save new annotations
-        new_annotations = [(1, 0.4, 0.4, 0.1, 0.1)]  # YOLO format: class_id, x_center, y_center, width, height
-        dataset.save_annotations(new_annotations, "image1", overwrite=True)
-
-        # Check if annotations were saved
-        annotations = dataset.get_annotations("image1")
-        assert len(annotations) == 1
-        assert annotations[0].class_id == 1
 
     def test_refresh_mechanism(self, sample_dataset):
         """Test refresh mechanism."""

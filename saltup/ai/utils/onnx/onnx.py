@@ -44,7 +44,7 @@ class OnnxCalibrationDataReader(CalibrationDataReader):
 
         
         # Process data
-        self.data_list = [preprocess_fn(image.get_data(), height, width) for image, label in dataloader]
+        self.data_list = [preprocess_fn(image.get_data(), height, width) for _, image, label in dataloader]
 
         self.input_name = session.get_inputs()[0].name
         self.datasize = len(self.data_list)

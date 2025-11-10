@@ -438,7 +438,7 @@ class TestCOCOLoader:
         assert len(loader) == 3
 
         # Test iteration
-        for image, annotations in loader:
+        for path, image, annotations in loader:
             assert isinstance(image, SaltupImage)
             assert isinstance(image.get_data(), np.ndarray)
             assert len(annotations) > 0
@@ -514,7 +514,7 @@ class TestCOCOLoader:
             annotations_file=str(ann_file),
             color_mode=ColorMode.RGB
         )
-        image, _ = next(loader_rgb)
+        _, image, _ = next(loader_rgb)
         assert image.get_data().shape[-1] == 3
 
         # Test BGR mode
@@ -523,7 +523,7 @@ class TestCOCOLoader:
             annotations_file=str(ann_file),
             color_mode=ColorMode.BGR
         )
-        image, _ = next(loader_bgr)
+        _, image, _ = next(loader_bgr)
         assert image.get_data().shape[-1] == 3
 
         # Test GRAY mode
@@ -532,7 +532,7 @@ class TestCOCOLoader:
             annotations_file=str(ann_file),
             color_mode=ColorMode.GRAY
         )
-        image, _ = next(loader_gray)
+        _, image, _ = next(loader_gray)
         assert len(image.get_data().shape) == 2 or image.get_data().shape[-1] == 1
 
     def test_iterator_reset(self, dataset_dir, sample_coco_data, sample_images):
@@ -547,11 +547,11 @@ class TestCOCOLoader:
         )
 
         # First iteration
-        first_images = [img for img, _ in loader]
+        first_images = [img for _, img, _ in loader]
         assert len(first_images) == 3
 
         # Second iteration
-        second_images = [img for img, _ in loader]
+        second_images = [img for _, img, _ in loader]
         assert len(second_images) == 3
 
         # Compare iterations
