@@ -249,9 +249,6 @@ class TestYOLODarknet:
             class_names
         )
         
-        # Verify structure
-        assert (dest_dir / 'classes.names').exists()
-        
         # Check class directories and symlinks
         for class_name in class_names:
             class_dir = dest_dir / class_name

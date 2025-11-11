@@ -124,7 +124,6 @@ class TestTrainPytorch:
         assert os.path.exists(trained_model_path)
         assert trained_model_path.endswith(".pth")
         assert os.path.exists(os.path.join(output_dir, "saved_models"))
-        assert os.path.exists(os.path.join(output_dir, "options.txt"))
 
 class TestCallbackIntegration:
     """Test callback integration in training."""

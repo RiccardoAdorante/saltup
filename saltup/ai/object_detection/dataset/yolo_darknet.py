@@ -732,8 +732,16 @@ class YoloDataset(Dataset):
         """
         if stats is None:
             stats = {
-                'missing_images': [], 'missing_labels': [], 'invalid_annotations': []
+                "missing_images": [], "missing_labels": [], "invalid_annotations": []
             }
+            
+        # Ensure stats has the required keys
+        if "missing_images" not in stats:
+            stats["missing_images"] = []
+        if "missing_labels" not in stats:
+            stats["missing_labels"] = []
+        if "invalid_annotations" not in stats:
+            stats["invalid_annotations"] = []
         
         intact = True
         for image_id in self._image_ids:
@@ -1573,7 +1581,7 @@ def create_symlinks_by_class(
     # Create only necessary class directories
     for class_name in classes_with_files:
         class_dir = dest_path / str(class_name)
-        class_dir.mkdir(exist_ok=True)
+        class_dir.mkdir(parents=True, exist_ok=True)
         logger.debug(f"Created class directory: {class_dir}")
 
     # Create symbolic links
