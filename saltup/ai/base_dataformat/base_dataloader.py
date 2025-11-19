@@ -2,7 +2,7 @@ from abc import ABC, abstractmethod
 from datetime import datetime
 from enum import Enum
 from pathlib import Path
-from typing import Any, Iterator, List, Tuple, Union
+from typing import Any, Iterator, List, Optional, Tuple, Union, cast, Callable
 
 import base64
 import io
@@ -27,7 +27,7 @@ class BaseDataloader(ABC):
     Provides basic functionality for loading and iterating over image-label pairs.
     """
 
-    _name: str = None
+    _name: str = ""
 
     def set_name(self, name: str):
         """Set the name of the dataloader."""
@@ -43,7 +43,7 @@ class BaseDataloader(ABC):
         raise NotImplementedError
     
     @abstractmethod
-    def __next__(self) -> Tuple[Image, List[BBoxClassId]]:
+    def __next__(self) -> Tuple[Path, Optional[Image], List[BBoxClassId]]:
         """Get next item from dataset."""
         raise NotImplementedError
 
@@ -63,23 +63,24 @@ class BaseDataloader(ABC):
         raise NotImplementedError
     
     def __getitem__(self, idx: Union[int, slice]) -> Union[
-        Tuple[Image, Any],
-        List[Tuple[Image, Any]]
+        Tuple[Path, Optional[Image], Any],
+        List[Tuple[Path, Optional[Image], Any]]
     ]:
         """Get item(s) by index.
-        
-        Provides a default implementation that uses iteration to access elements.
-        Subclasses can override this method with more efficient implementations
-        that directly access their data structures.
-        
+
+        Default implementation iterates through the dataloader to retrieve items.
+        Subclasses can override this method to provide efficient random access.
+
         Args:
             idx: Integer index or slice object
-            
+
         Returns:
-            Single (image, annotations) tuple or list of tuples if slice
-            
+            Single (Path, Image, label) tuple for an integer index, or a list of
+            such tuples for a slice.
+
         Raises:
-            IndexError: If index out of range
+            IndexError: If index is out of range
+            TypeError: If idx is not an int or slice
         """
         # Handle negative indices
         if isinstance(idx, int):
@@ -99,14 +100,14 @@ class BaseDataloader(ABC):
             indices = range(*idx.indices(len(self)))
             
             # Use the integer indexing we just defined
-            return [self[i] for i in indices]
+            return cast(List[Tuple[Path, Optional[Image], Any]], [self[i] for i in indices])
         
         else:
             raise TypeError(f"Invalid index type: {type(idx)}")
 
     @staticmethod
     def load_image(
-        image_path: str, 
+        image_path: Union[str, Path], 
         color_mode: ColorMode = ColorMode.BGR
     ) -> Image:
         """Load and convert image to specified color mode.
@@ -149,8 +150,8 @@ class BaseDataloader(ABC):
 
     def save_dataset(
         self,
-        filepath: str = '',
-        process_fn: callable = lambda x: x,
+        filepath: Union[str, Path] = '',
+        process_fn: Callable[[Any], Any] = lambda x: x,
         use_tqdm: bool = True,
         format: StorageFormat = StorageFormat.PICKLE
     ) -> Path:
@@ -209,7 +210,7 @@ class BaseDataloader(ABC):
     
     @staticmethod
     def load_dataset(
-        filepath: str,
+        filepath: Union[str, Path],
         format: StorageFormat = StorageFormat.PICKLE
     ) -> Iterator[Tuple[Any, Any]]:
         """Load a dataset from a file and return an iterator.

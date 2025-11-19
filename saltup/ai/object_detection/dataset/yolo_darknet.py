@@ -1,3 +1,4 @@
+import io
 from PIL import Image
 import os
 import json
@@ -5,11 +6,16 @@ import random
 import shutil
 import numpy as np
 from tqdm import tqdm
+from PIL import Image as PILImage
+from botocore.exceptions import ClientError
+import tempfile
 from pathlib import Path
 from collections import defaultdict, Counter, OrderedDict
 from typing import Iterable, Union, List, Dict, Optional, Tuple, Set
 
 from saltup.utils.data.image.image_utils import Image
+from saltup.utils.data.s3.s3_utils import S3, list_files_by_date
+
 from saltup.ai.object_detection.utils.bbox import BBox, BBoxClassId, BBoxFormat
 from saltup.ai.base_dataformat.base_dataloader import BaseDataloader, ColorMode
 from saltup.ai.base_dataformat.base_dataset import Dataset
@@ -19,8 +25,8 @@ from saltup.utils import configure_logging
 class YoloDarknetLoader(BaseDataloader):
     def __init__(
         self,
-        images_dir: str,
-        labels_dir: str,
+        images_dir: Union[str, Path],
+        labels_dir: Union[str, Path],
         color_mode: ColorMode = ColorMode.RGB
     ):
         """
@@ -57,20 +63,20 @@ class YoloDarknetLoader(BaseDataloader):
         self._current_index = 0  # Reset position when creating new iterator
         return self
 
-    def __next__(self) -> Tuple[Image, List[BBoxClassId]]:
+    def __next__(self) -> Tuple[Path, Optional[Image], List[BBoxClassId]]:
         """Get next item from dataset."""
         if self._current_index >= len(self.image_label_pairs):
             self._current_index = 0  # Reset for next iteration
             raise StopIteration
-        
-        image, annotations = self._load_item(self._current_index) 
+
+        image_path, image, annotations = self._load_item(self._current_index)
         self._current_index += 1
-        
-        return image, annotations
-    
-    def __getitem__(self, idx: Union[int, slice])-> Union[
-        Tuple[Image, List[BBoxClassId]],
-        List[Tuple[Image, List[BBoxClassId]]]
+
+        return image_path, image, annotations
+
+    def __getitem__(self, idx: Union[int, slice]) -> Union[
+        Tuple[Path, Optional[Image], List[BBoxClassId]],
+        List[Tuple[Path, Optional[Image], List[BBoxClassId]]]
     ]:
         """Get item(s) by index.
         
@@ -78,8 +84,8 @@ class YoloDarknetLoader(BaseDataloader):
             idx: Integer index or slice object
             
         Returns:
-            Single (image, annotations) tuple or list of tuples if slice
-            
+            Single (image_path, image, annotations) tuple or list of tuples if slice
+
         Raises:
             IndexError: If index out of range
         """
@@ -90,15 +96,15 @@ class YoloDarknetLoader(BaseDataloader):
         else:
             # Handle single index
             return self._load_item(idx)
-        
-    def _load_item(self, idx: int)-> Tuple[Image, List[BBoxClassId]]:
+
+    def _load_item(self, idx: int) -> Tuple[Path, Optional[Image], List[BBoxClassId]]:
         """Load single item by index.
         
         Args:
             idx: Index of the item to load
             
         Returns:
-            Tuple of (image, annotations)
+            Tuple of (image_path, image, annotations)
             
         Raises:
             IndexError: If index out of range
@@ -116,13 +122,13 @@ class YoloDarknetLoader(BaseDataloader):
             # (class_id, xc, yc, w, h)
             coordinates=lbl[1:],
             class_id=lbl[0],
-            class_name=None,
+            class_name="",
             fmt=BBoxFormat.YOLO,
             img_width=image_width,
             img_height=image_height
         ) for lbl in read_label(label_path)]
-        
-        return image, annotations        
+
+        return Path(image_path), image, annotations
 
     def __len__(self):
         """Return total number of samples in dataset."""
@@ -169,8 +175,274 @@ class YoloDarknetLoader(BaseDataloader):
         return image_label_pairs
 
 
+class YoloDarknetS3Loader(BaseDataloader):
+    def __init__(
+        self,
+        images_dir: Union[str, Path],
+        labels_dir: Union[str, Path],
+        s3_client: S3,
+        color_mode: ColorMode = ColorMode.RGB,
+        download_file: bool = False,
+        max_files: int = -1,
+    ):
+        """
+        Initialize YoloDarknetS3Loader for datasets stored on S3.
+
+        Args:
+            images_dir: Local path or S3 URI for images (e.g. 's3://bucket/path' or '/local/path')
+            labels_dir: Local path or S3 URI for labels (e.g. 's3://bucket/path' or '/local/path')
+            s3_client: An S3 helper/client instance providing download/list methods
+            download_file: If True, download files from S3 to local temporary directories when iterating
+            color_mode: Color mode for loading images
+            max_files: Maximum number of files to download when download_file is True (-1 for unlimited)
+
+        Raises:
+            FileNotFoundError: If local directories don't exist when download_file is False
+            ValueError: If max_files is invalid when download_file is True
+        """
+        
+        self.download_file = download_file
+        self.max_files = max_files
+        self.downloaded_files = 0
+        self.s3_client = s3_client
+        
+        if self.download_file:
+            if self.max_files <= 0:
+                raise ValueError("max_files must be > 0 when download_file is True")
+        
+        self.__logger = configure_logging.get_logger(__name__)
+        self.__logger.info("Initializing YOLO Darknet dataset loader")
+            
+        self._images_dir = Path(images_dir)
+        self._labels_dir = Path(labels_dir)
+        self.color_mode = color_mode
+        self._current_index = 0
+        
+        # Load image-label pairs
+        self.image_label_pairs = self._load_image_label_pairs()
+        self.__logger.info(f"Found {len(self.image_label_pairs)} image-label pairs")
+
+    def __iter__(self):
+        """Return iterator object (self in this case)."""
+        self._current_index = 0  # Reset position when creating new iterator
+        return self
+
+    def __next__(self) -> Tuple[Union[Path, str], Optional[Image], List[BBoxClassId]]:
+        """Get next item from dataset."""
+        if self._current_index >= len(self.image_label_pairs):
+            self._current_index = 0  # Reset for next iteration
+            raise StopIteration
+        
+        image_path, image, annotations = self._load_item(self._current_index)
+
+        self._current_index += 1
+
+        return image_path, image, annotations
+
+    def __getitem__(self, idx: Union[int, slice]) -> Union[
+        Tuple[Union[Path, str], Optional[Image], List[BBoxClassId]],
+        List[Tuple[Union[Path, str], Optional[Image], List[BBoxClassId]]]
+    ]:
+        """Get item(s) by index.
+
+        Args:
+            idx: Integer index or slice object
+
+        Returns:
+            Single (image_path, image, annotations) tuple or list of tuples if slice
+
+        Raises:
+            IndexError: If index out of range
+        """
+        if isinstance(idx, slice):
+            # Handle slice
+            indices = range(*idx.indices(len(self)))
+            return [self._load_item(i) for i in indices]
+        else:
+            # Handle single index
+            return self._load_item(idx)
+
+    def _load_item(self, idx: int) -> Tuple[Union[Path, str], Optional[Image], List[BBoxClassId]]:
+        """Load single item by index.
+
+        Args:
+            idx: Index of the item to load
+
+        Returns:
+            Tuple of (image_path, image, annotations)
+
+        Raises:
+            IndexError: If index out of range
+        """
+        if idx < 0:
+            idx += len(self)
+        if not 0 <= idx < len(self):
+            raise IndexError("Index out of range")
+
+        image_path, label_path = self.image_label_pairs[idx]
+
+        if self.download_file and self.downloaded_files < self.max_files:
+            with tempfile.TemporaryDirectory() as tmpdirname:
+                
+                
+                try:
+                    self.s3_client.download_file(
+                        image_path,
+                        tmpdirname
+                    )
+                    self.downloaded_files += 1
+                except ClientError as e:
+                    self.__logger.error(f"Failed to download {image_path} from S3: {str(e)}")
+                    image = None
+                    raise
+                image = self.load_image(os.path.join(tmpdirname, os.path.basename(image_path)), self.color_mode)
+                image_width, image_height = image.get_width(), image.get_height()
+                
+        else:
+            image_height, image_width = self._update_s3_image_dimensions(self.s3_client._bucket_name,
+                                                                         image_path)
+            image = None  # Image not downloaded
+            
+        with tempfile.TemporaryDirectory() as tmpdirname:
+            try:
+                self.s3_client.download_file(
+                    label_path,
+                    tmpdirname
+                )
+                temp_label_path = os.path.join(tmpdirname, os.path.basename(label_path))
+            except ClientError as e:
+                self.__logger.error(f"Failed to download {label_path} from S3: {str(e)}")
+                raise
+        
+            annotations = [BBoxClassId(
+                # (class_id, xc, yc, w, h)
+                coordinates=lbl[1:],
+                class_id=lbl[0],
+                class_name="",
+                fmt=BBoxFormat.YOLO,
+                img_width=image_width if image_width else None,
+                img_height=image_height if image_height else None
+            ) for lbl in read_label(temp_label_path)]
+
+        image_path = os.path.join("s3://", self.s3_client._bucket_name, image_path)
+        return image_path, image, annotations
+    
+    def _update_s3_image_dimensions(
+        self,
+        bucket_name: str,
+        key: str,
+    ) -> tuple[int | None, int | None]:
+        """
+        Update S3 object dimensions in metadata if missing.
+        Returns (width, height) tuple.
+        
+        Args:
+            s3_client: S3 client instance
+            bucket_name: S3 bucket name
+            key: S3 object key
+        """
+        
+        # Get S3 object metadata
+        try:
+            head_response = self.s3_client._client.head_object(Bucket=bucket_name, Key=key)
+            s3_metadata = head_response.get('Metadata', {})
+            
+            # Check if dimensions already exist in S3 metadata
+            existing_width = s3_metadata.get('width')
+            existing_height = s3_metadata.get('height')
+            
+            if existing_width and existing_height:
+                # Convert to int if they're strings
+                try:
+                    width = int(existing_width)
+                    height = int(existing_height)
+                    
+                    return width, height
+                except (ValueError, TypeError):
+                    pass
+        
+        except Exception as e:
+            print(f"⚠️ Failed to get S3 metadata for {key}: {e}")
+            return None, None
+        
+        # Check if it's an image file by extension
+        if not key.lower().endswith(('.jpg', '.jpeg', '.png', '.gif', '.bmp', '.tiff')):
+            return None, None
+        
+        try:
+            from PIL import Image
+            import io
+            
+            # Download just the image headers (first 4KB should be enough for most images)
+            try:
+                response = self.s3_client._client.get_object(
+                    Bucket=bucket_name, 
+                    Key=key, 
+                    Range="bytes=0-4095"
+                )
+                
+                # Get image dimensions from header
+                img_data = io.BytesIO(response['Body'].read())
+                img = Image.open(img_data)
+                width, height = img.size
+                
+                return width, height
+            except Exception as e:
+                print(f"⚠️ Failed to get image dimensions from S3 object {key}: {e}")
+                return None, None
+            
+        except Exception as e:
+            print(f"⚠️ Failed to get dimensions for S3 object {key}: {e}")
+            return None, None
+        
+    def __len__(self):
+        """Return total number of samples in dataset."""
+        return len(self.image_label_pairs)
+    
+    def split(self, ratio):
+        raise NotImplementedError("Not implemented yet")
+    
+    @staticmethod
+    def merge(YoloDarknetLoader1, YoloDarknetLoader2) -> 'YoloDarknetLoader':
+        """Merge two YoloDarknetLoader instances into one.
+        
+        Args:
+            YoloDarknetLoader1: First loader instance
+            YoloDarknetLoader2: Second loader instance
+        """
+        raise NotImplementedError("Merging not implemented yet")
+
+    def _load_image_label_pairs(self) -> List[Tuple[str, str]]:
+        """
+        Load pairs from images and labels directories.
+        
+        Returns:
+            List of tuples containing (image_path, annotations) pairs
+        """
+        image_label_pairs = []
+        skipped_images = 0
+
+        # List files by date if start_date and end_date are provided
+        image_list = self.s3_client.ls(str(self._images_dir), ['*.jpg', '*.jpeg', '*.png'], only_basename=True)
+        label_list = self.s3_client.ls(str(self._labels_dir), ['*.txt'], only_basename=True)
+        
+        for image_file in image_list:
+            common_name = image_file.split(".")[0]
+            label_name = f"{common_name}.txt"
+            if label_name in label_list:
+                self.__logger.info(f"Found label for {image_file}: {label_name}")
+                image_path = str(self._images_dir / image_file)
+                label_path = str(self._labels_dir / label_name)
+                image_label_pairs.append((image_path, label_path))
+            else:
+                self.__logger.warning(f"Label not found for {image_file}")
+                skipped_images += 1
+                continue
+            
+        return image_label_pairs
+
 class YoloDataset(Dataset):
-    def __init__(self, images_dir: str, labels_dir: str, refresh_each: int = -1):
+    def __init__(self, images_dir: Union[str, Path], labels_dir: Union[str, Path], refresh_each: int = -1):
         """
         Initialize the YoloDataset for medium to large datasets.
 
@@ -342,7 +614,7 @@ class YoloDataset(Dataset):
             annotations.append(BBoxClassId(
                 coordinates=[x_center, y_center, width, height],
                 class_id=int(class_id),
-                class_name=None,
+                class_name="",
                 fmt=BBoxFormat.YOLO,
                 img_width=image_width,
                 img_height=image_height
@@ -436,7 +708,7 @@ class YoloDataset(Dataset):
         ids = sorted(self._image_ids)  # Convert to sorted list
         return ids[:max_entries] if max_entries else ids
 
-    def check_integrity(self, stats: dict = None) -> bool:
+    def check_integrity(self, stats: dict = {None: []}) -> bool:
         """
         Check the integrity of the dataset.
         
@@ -460,8 +732,16 @@ class YoloDataset(Dataset):
         """
         if stats is None:
             stats = {
-                'missing_images': [], 'missing_labels': [], 'invalid_annotations': []
+                "missing_images": [], "missing_labels": [], "invalid_annotations": []
             }
+            
+        # Ensure stats has the required keys
+        if "missing_images" not in stats:
+            stats["missing_images"] = []
+        if "missing_labels" not in stats:
+            stats["missing_labels"] = []
+        if "invalid_annotations" not in stats:
+            stats["invalid_annotations"] = []
         
         intact = True
         for image_id in self._image_ids:
@@ -562,7 +842,7 @@ def is_yolo_darknet_dataset(root_dir: Union[str, Path]) -> bool:
     # Count how many files have YOLO-format annotations
     yolo_format_count = 0
 
-    def _is_float_in_range(s: str, min_val: float, max_val: float) -> bool:
+    def _is_float_in_range(s: Union[str, float], min_val: float, max_val: float) -> bool:
         """Check if a string represents a float within the specified range."""
         try:
             val = float(s)
@@ -593,10 +873,10 @@ def is_yolo_darknet_dataset(root_dir: Union[str, Path]) -> bool:
     return yolo_format_count >= max(1, len(txt_files[:10]) * 0.3)
 
 
-def get_dataset_paths(root_dir: str) -> Tuple[
-    Optional[str], Optional[str], 
-    Optional[str], Optional[str], 
-    Optional[str], Optional[str]
+def get_dataset_paths(root_dir: Union[str, Path]) -> Tuple[
+    Optional[Union[str, Path]], Optional[Union[str, Path]], 
+    Optional[Union[str, Path]], Optional[Union[str, Path]], 
+    Optional[Union[str, Path]], Optional[Union[str, Path]]
 ]:
     """
     Return paths to train/val/test image and label directories in a YOLO dataset.
@@ -704,18 +984,22 @@ def analyze_dataset(root_dir: str, class_names: Optional[List[str]] = None) -> N
         print(f"- Total labels: {structure[split]['labels']}")
         print(f"- Matched pairs: {structure[split]['matched']}")
         
-        if structure[split]['unmatched_images']:
-            print(f"- Images without labels ({len(structure[split]['unmatched_images'])}):")
-            for img in structure[split]['unmatched_images'][:5]:
+        # Type-safe access to unmatched_images
+        unmatched_images = structure[split]['unmatched_images']
+        if isinstance(unmatched_images, list) and unmatched_images:
+            print(f"- Images without labels ({len(unmatched_images)}):")
+            for img in unmatched_images[:5]:
                 print(f"  * {img}")
-            if len(structure[split]['unmatched_images']) > 5:
+            if len(unmatched_images) > 5:
                 print("    ...")
                 
-        if structure[split]['unmatched_labels']:
-            print(f"- Labels without images ({len(structure[split]['unmatched_labels'])}):")
-            for lbl in structure[split]['unmatched_labels'][:5]:
+        # Type-safe access to unmatched_labels
+        unmatched_labels = structure[split]['unmatched_labels']
+        if isinstance(unmatched_labels, list) and unmatched_labels:
+            print(f"- Labels without images ({len(unmatched_labels)}):")
+            for lbl in unmatched_labels[:5]:
                 print(f"  * {lbl}")
-            if len(structure[split]['unmatched_labels']) > 5:
+            if len(unmatched_labels) > 5:
                 print("    ...")
         
         # Object count analysis
@@ -731,7 +1015,7 @@ def analyze_dataset(root_dir: str, class_names: Optional[List[str]] = None) -> N
                 print(f"  * {class_name}: {count}")
 
 
-def read_label(label_file: Union[str, Path]) -> list:
+def read_label(label_file: Union[str, Path]) -> List[Tuple[int, float, float, float, float]]:
     """Parse YOLO Darknet format labels from a text file.
 
     Args:
@@ -763,7 +1047,7 @@ def read_label(label_file: Union[str, Path]) -> list:
     return labels
 
 
-def write_label(label_file: str, annotations: Iterable[Union[list, tuple]], file_mode: str = 'w') -> None:
+def write_label(label_file: Union[str, Path], annotations: Iterable[Union[list, tuple]], file_mode: str = 'w') -> None:
     """Write object detection labels in YOLO format.
 
     Args:
@@ -789,7 +1073,7 @@ def write_label(label_file: str, annotations: Iterable[Union[list, tuple]], file
             file.write(f'{" ".join(map(str, annotation))}\n')
 
 
-def list_all_labels(label_dir: str) -> List[str]:
+def list_all_labels(label_dir: str) -> List[List[Tuple[int, float, float, float, float]]]:
     """
     List all labels from text files in a directory.
     
@@ -821,8 +1105,8 @@ def list_all_labels(label_dir: str) -> List[str]:
 def replace_label_class(
    old_class_id: int,
    new_class_id: int, 
-   label_dir: str = None, 
-   filepath_list: list = None,
+   label_dir: Optional[str] = None, 
+   filepath_list: Optional[list] = None,
    verbose: bool = False 
 ) -> tuple[int, list]:
    """Replace specified class ID in YOLO Darknet label files with a new ID.
@@ -897,7 +1181,7 @@ def replace_label_class(
    return modified_count, modified_files
 
 
-def shift_class_ids(label_folder: str, shift_value: int, output_folder: str = None) -> None:
+def shift_class_ids(label_folder: str, shift_value: int, output_folder: Optional[str] = None) -> None:
     """Shift all class IDs in YOLO Darknet label files by a constant value.
 
     Args:
@@ -975,8 +1259,8 @@ def convert_to_coco_annotations(image_dir: str, label_dir: str, classes: list[st
         if img_filename.endswith((".jpg", ".png")):
             img_id += 1
             img_path = os.path.join(image_dir, img_filename)
-            img = Image.open(img_path)
-            img_width, img_height = img.size
+            img = Image(img_path)
+            img_width, img_height = img.get_width(), img.get_height()
 
             # Add image to the COCO images array
             images.append({
@@ -1183,7 +1467,7 @@ def split_and_organize_dataset(
 
 def count_objects(
     labels_dir: str,
-    class_names: list = None,
+    class_names: Optional[list] = None,
     verbose: bool = False
 ) -> tuple[Dict[Union[int, str], int], int]:
     """Count labels instances and annotated images in YOLO dataset.
@@ -1265,19 +1549,19 @@ def create_symlinks_by_class(
         logger.warning(f"No label files found in {lbls_path}")
         return
 
-    # If no class names provided, use unique classes from label files
-    if class_names is None:
-        class_names = _extract_unique_classes(lbl_files)
-        logger.info(f"Extracted classes: {class_names}")
+    # # If no class names provided, use unique classes from label files
+    # if class_names is None:
+    #     class_names = _extract_unique_classes(lbl_files)
+    #     logger.info(f"Extracted classes: {class_names}")
 
-    # Create destination directory
-    dest_path.mkdir(parents=True, exist_ok=True)
+    # # Create destination directory
+    # dest_path.mkdir(parents=True, exist_ok=True)
 
-    # Create classes.names file
-    class_names_file = dest_path / 'classes.names'
-    with class_names_file.open('w') as f:
-        f.write('\n'.join(map(str, class_names)))
-    logger.info(f"Created classes file: {class_names_file}")
+    # # Create classes.names file
+    # class_names_file = dest_path / 'classes.names'
+    # with class_names_file.open('w') as f:
+    #     f.write('\n'.join(map(str, class_names)))
+    # logger.info(f"Created classes file: {class_names_file}")
 
     # Create labels map
     labels_map = _create_labels_map(lbl_files, class_names)
@@ -1286,7 +1570,7 @@ def create_symlinks_by_class(
     classes_with_files = set()
     for lbl_file in labels_map:
         # Get the actual image file path
-        img_file = Path(_find_matching_image(lbl_file.stem, str(imgs_path)))
+        img_file = _find_matching_image(lbl_file.stem, str(imgs_path))
         
         # Only count classes with both image and label files
         if img_file is not None and img_file.exists():
@@ -1297,14 +1581,14 @@ def create_symlinks_by_class(
     # Create only necessary class directories
     for class_name in classes_with_files:
         class_dir = dest_path / str(class_name)
-        class_dir.mkdir(exist_ok=True)
+        class_dir.mkdir(parents=True, exist_ok=True)
         logger.debug(f"Created class directory: {class_dir}")
 
     # Create symbolic links
     symlink_count = 0
     for lbl_file in labels_map:
         # Get actual paths for image and label files
-        img_file = Path(_find_matching_image(lbl_file.stem, str(imgs_path)))
+        img_file = _find_matching_image(lbl_file.stem, str(imgs_path))
         lbl_file = lbls_path / lbl_file.name
 
         if img_file is None or not img_file.exists():
@@ -1374,7 +1658,7 @@ def find_image_label_pairs(labels_dir: str, images_dir: str) -> Tuple[List[str],
     return matched_images, matched_labels, unmatched_labels
 
 
-def _extract_unique_classes(label_files: List[Path]) -> List[str]:
+def _extract_unique_classes(label_files: List[Path]) -> List[int]:
     """Extract unique classes from label files.
 
     Args:
@@ -1383,12 +1667,15 @@ def _extract_unique_classes(label_files: List[Path]) -> List[str]:
     Returns:
         List of unique class names
     """
-    return list({
-        int(label[0])
-        for file in label_files
-        for label in read_label(str(file))
-    })
-
+    seen = set()
+    unique_classes = []
+    for file in label_files:
+        for label in read_label(file):
+            class_id = int(label[0])
+            if class_id not in seen:
+                seen.add(class_id)
+                unique_classes.append(class_id)
+    return unique_classes
 
 def _create_labels_map(
    lbl_files: List[Path], 
@@ -1455,7 +1742,7 @@ def _image_per_class_id(labels_dir: str, images_dir: str) -> dict:
     return class_to_images
 
 
-def _find_matching_image(base_name: str, images_dir: str) -> Optional[Path]:
+def _find_matching_image(base_name: str, images_dir: Union[str, Path]) -> Optional[Path]:
     """Find matching image file for a given base name.
     
     Args:
@@ -1472,7 +1759,7 @@ def _find_matching_image(base_name: str, images_dir: str) -> Optional[Path]:
     return None
 
 
-def _find_matching_label(base_name: str, labels_dir: str) -> Optional[Path]:
+def _find_matching_label(base_name: str, labels_dir: Union[str, Path]) -> Optional[Path]:
     """Find matching label file for a given base name.
     
     Args:

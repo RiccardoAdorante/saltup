@@ -156,7 +156,7 @@ class AnchorsBasedDatagen(BaseDatagenerator):
             - The image is preprocessed to the target height and width without padding.
         """
         # Get image and labels from dataset loader
-        image, annotation_data = self.dataloader[idx]
+        path, image, annotation_data = self.dataloader[idx]
         
         # Extract boxes and class labels
         if len(annotation_data) > 0:
@@ -259,7 +259,7 @@ class AnchorsBasedDatagen(BaseDatagenerator):
         try:
             
             # Get image and labels from dataset loader
-            orig_image, orig_annotation_data = self.dataloader[idx]
+            orig_path, orig_image, orig_annotation_data = self.dataloader[idx]
 
             # Preprocess image
             processed_image, origin_boxes, class_labels = self._process_image_dataloader(idx)

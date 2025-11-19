@@ -74,7 +74,7 @@ class keras_ClassificationDataGenerator(BaseDatagenerator, Sequence):
         labels = []
         
         for i in batch_indexes:
-            img, label = self.dataloader[i]
+            path, img, label = self.dataloader[i]
             
             # Apply preprocessing
             if self._preprocess:
@@ -193,7 +193,7 @@ class pytorch_ClassificationDataGenerator(BaseDatagenerator, Dataset):
         actual_idx = self._indexes[idx]
         
         # Get the image and label
-        img, label = self.dataloader[actual_idx]
+        path, img, label = self.dataloader[actual_idx]
         
         # Apply preprocessing
         if self._preprocess:

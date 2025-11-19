@@ -38,6 +38,21 @@ class ColorMode(IntEnum):
     BGR = auto()
     GRAY = auto()
 
+    def to_string(self):
+        """
+        Convert the ColorMode enum to its string representation.
+
+        Returns:
+            str: The string representation of the color mode.
+        """
+        if self == ColorMode.RGB:
+            return "RGB"
+        elif self == ColorMode.BGR:
+            return "BGR"
+        elif self == ColorMode.GRAY:
+            return "GRAY"
+        else:
+            return "UNKNOWN"
 
 class ImageFormat(IntEnum):
     HWC = auto()  # Height, Width, Channels (default)
@@ -90,7 +105,8 @@ class Image:
             image_format: Format of the image (HWC or CHW). Default is HWC.
         """
         self.color_mode = color_mode
-
+        self.image_format = ImageFormat.HWC  # Default format is HWC
+        
         # Check if the input is a NumPy array
         if isinstance(image_input, np.ndarray):
             self.__image = self._process_image_data(image_input)
@@ -346,14 +362,16 @@ class Image:
             f"Cannot convert image with shape {image.shape} to {target_format} format.")
 
     @classmethod
-    def jpg_to_raw(cls, input_file: str, grayscale: bool = False) -> np.ndarray:
+    def jpg_to_raw(cls, input_file: str, grayscale: bool = False) -> Optional[np.ndarray]:
         """Convert a JPEG image to a raw array."""
         if grayscale:
-            img_data = cv2.imread(input_file, cv2.IMREAD_GRAYSCALE)
+            image_data = cv2.imread(input_file, cv2.IMREAD_GRAYSCALE)
         else:
-            img_data = cv2.imread(input_file)
-            img_data = cv2.cvtColor(img_data, cv2.COLOR_BGR2RGB)
-        return img_data
+            image_data = cv2.imread(input_file)
+            if image_data is not None:  # Check if image was loaded successfully
+                image_data = cv2.cvtColor(image_data, cv2.COLOR_BGR2RGB)
+    
+        return image_data
 
     @classmethod
     def resize_image(cls, image: np.ndarray, new_size: tuple) -> np.ndarray:

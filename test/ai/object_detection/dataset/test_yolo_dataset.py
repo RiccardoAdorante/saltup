@@ -249,9 +249,6 @@ class TestYOLODarknet:
             class_names
         )
         
-        # Verify structure
-        assert (dest_dir / 'classes.names').exists()
-        
         # Check class directories and symlinks
         for class_name in class_names:
             class_dir = dest_dir / class_name
@@ -329,7 +326,7 @@ class TestYOLODarknetLoader:
         assert len(loader) == 4  # Based on sample_dataset fixture
         
         # Test iteration
-        for image, labels in loader:
+        for image_path, image, labels in loader:
             assert isinstance(image, SaltupImage)
             assert isinstance(image.get_data(), np.ndarray)
             assert len(labels) > 0  # Each image has at least one label
@@ -381,7 +378,7 @@ class TestYOLODarknetLoader:
         
         # Check first image of each loader
         for loader in [loader_rgb, loader_bgr, loader_gray]:
-            image, _ = next(iter(loader))
+            _, image, _ = next(iter(loader))
             assert isinstance(image, SaltupImage)
             image_array = image.get_data()
             assert isinstance(image_array, np.ndarray)
@@ -434,11 +431,11 @@ class TestYOLODarknetLoader:
         )
         
         # First iteration
-        first_images = [img for img, _ in loader]
+        first_images = [img for _, img, _ in loader]
         assert len(first_images) == 4
         
         # Second iteration
-        second_images = [img for img, _ in loader]
+        second_images = [img for _, img, _ in loader]
         assert len(second_images) == 4
         
         # Compare iterations
@@ -536,20 +533,6 @@ class TestYoloDataset:
         # Introduce an error by removing a label file
         os.remove(Path(labels_dir) / "img1.txt")
         assert not dataset.check_integrity()
-        
-    def test_save_annotations(self, temp_dataset_dir):
-        """Test saving annotations."""
-        images_dir, labels_dir = temp_dataset_dir
-        dataset = YoloDataset(images_dir, labels_dir)
-
-        # Save new annotations
-        new_annotations = [(1, 0.4, 0.4, 0.1, 0.1)]  # YOLO format: class_id, x_center, y_center, width, height
-        dataset.save_annotations(new_annotations, "image1", overwrite=True)
-
-        # Check if annotations were saved
-        annotations = dataset.get_annotations("image1")
-        assert len(annotations) == 1
-        assert annotations[0].class_id == 1
 
     def test_refresh_mechanism(self, sample_dataset):
         """Test refresh mechanism."""

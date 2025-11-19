@@ -81,7 +81,7 @@ def test_get_extensions_and_img_size(create_dummy_dataset):
 def test_iter_and_next(create_dummy_dataset):
     loader = ClassificationDataloader(source=create_dummy_dataset)
     count = 0
-    for img, label in loader:
+    for _, img, label in loader:
         assert isinstance(img, np.ndarray)
         assert isinstance(label, int)
         count += 1
@@ -93,7 +93,7 @@ def test_get_idx_to_class(create_dummy_dataset):
     assert set(idx_to_class.values()) == {'cat', 'dog'}
     assert set(idx_to_class.keys()) == set([0, 1])
 
-    img, label = loader[0]
+    _, img, label = loader[0]
     assert isinstance(img, np.ndarray)
     assert isinstance(label, int)
 
@@ -105,5 +105,5 @@ def test_dataloader_with_classes_dict(create_dummy_dataset):
     assert loader.idx_to_class == {0: 'dog', 1: 'cat'}
     assert loader.get_num_classes() == 2
 
-    _, label = loader[0]
+    _, _, label = loader[0]
     assert label in [0, 1]

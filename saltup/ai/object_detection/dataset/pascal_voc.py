@@ -38,9 +38,12 @@ import numpy as np
 import xml.etree.ElementTree as ET
 from xml.dom import minidom
 from pathlib import Path
+import tempfile
 from typing import Dict, List, Tuple, Optional, Union
 
 from saltup.utils.data.image.image_utils import Image
+from saltup.utils.data.s3.s3_utils import S3
+from botocore.exceptions import ClientError
 from saltup.ai.object_detection.utils.bbox import BBoxClassId, BBoxFormat
 from saltup.ai.base_dataformat.base_dataloader import BaseDataloader, ColorMode
 from saltup.utils import configure_logging
@@ -49,8 +52,8 @@ from saltup.utils import configure_logging
 class PascalVOCLoader(BaseDataloader):
     def __init__(
         self,
-        images_dir: str,
-        annotations_dir: str,
+        images_dir: Union[str, Path],
+        annotations_dir: Union[str, Path],
         color_mode: ColorMode = ColorMode.RGB
     ):
         """
@@ -87,23 +90,23 @@ class PascalVOCLoader(BaseDataloader):
         self._current_index = 0  # Reset position when creating new iterator
         return self
 
-    def __next__(self) -> Tuple[Image, List[BBoxClassId]]:
+    def __next__(self) -> Tuple[Path, Optional[Image], List[BBoxClassId]]:
         """Get next item from dataset."""
         if self._current_index >= len(self.image_annotation_pairs):
             self._current_index = 0  # Reset for next iteration
             raise StopIteration
-            
-        image, annotations = self._load_item(self._current_index)
-        self._current_index += 1        
-        return image, annotations
+
+        image_path, image, annotations = self._load_item(self._current_index)
+        self._current_index += 1
+        return image_path, image, annotations
 
     def __len__(self):
         """Return total number of samples in dataset."""
         return len(self.image_annotation_pairs)
     
     def __getitem__(self, idx: Union[int, slice]) -> Union[
-        Tuple[Image, List[BBoxClassId]],
-        List[Tuple[Image, List[BBoxClassId]]]
+        Tuple[Path, Optional[Image], List[BBoxClassId]],
+        List[Tuple[Path, Optional[Image], List[BBoxClassId]]]
     ]:
         """Get item(s) by index.
         
@@ -123,15 +126,15 @@ class PascalVOCLoader(BaseDataloader):
         else:
             # Handle single index
             return self._load_item(idx)
-    
-    def _load_item(self, idx: int) -> Tuple[Image, List[BBoxClassId]]:
+
+    def _load_item(self, idx: int) -> Tuple[Path, Optional[Image], List[BBoxClassId]]:
         """Load single item by index.
         
         Args:
             idx: Index of the item to load
             
         Returns:
-            Tuple of (image, annotations)
+            Tuple of (image_path, image, annotations)
             
         Raises:
             IndexError: If index out of range
@@ -144,9 +147,9 @@ class PascalVOCLoader(BaseDataloader):
         image_path, annotation_path = self.image_annotation_pairs[idx]
         image = self.load_image(image_path, self.color_mode)
         annotations = read_annotation(annotation_path)
-        
-        return image, annotations
-    
+
+        return Path(image_path), image, annotations
+
     def split(self, ratio):
         """Split dataset into subsets based on given ratio."""
         raise NotImplementedError("Split method not implemented for Pascal VOC format")
@@ -182,6 +185,192 @@ class PascalVOCLoader(BaseDataloader):
                 else:
                     skipped_images += 1
                     self.logger.warning(f"Annotation not found for {image_file}")
+        
+        if skipped_images > 0:
+            self.logger.warning(f"Skipped {skipped_images} images due to missing annotations")
+            
+        return image_annotation_pairs
+    
+class PascalVOCS3Loader(BaseDataloader):
+    def __init__(
+        self,
+        images_dir: str,
+        annotations_dir: str,
+        s3_client: S3,
+        download_file: bool = False,
+        max_files: int = -1,
+        color_mode: ColorMode = ColorMode.RGB
+    ):
+        """
+        Initialize Pascal VOC S3 dataset loader.
+
+        Args:
+            images_dir: Directory containing images (local or S3 path)
+            annotations_file: Path to annotation file or directory (local or S3 path)
+            s3_client: S3 client for downloading files
+            max_files: Maximum number of files to download from S3 (-1 for all)
+            download_file: Whether to download files from S3
+            color_mode: Color mode for loading images
+
+        Raises:
+            FileNotFoundError: If directories don't exist
+        """
+        self.download_file = download_file
+        self.max_files = max_files
+        self.downloaded_files = 0
+        self.s3_client = s3_client
+
+        if self.download_file:
+            if self.max_files <= 0:
+                raise ValueError("max_files must be > 0 when download_file is True")
+        self.logger = configure_logging.get_logger(__name__)
+        self.logger.info("Initializing Pascal VOC dataset loader")
+    
+        self.images_dir = Path(images_dir)
+        self.annotations_dir = Path(annotations_dir)
+        self.color_mode = color_mode
+        self._current_index = 0
+        
+        # Load image-annotation pairs
+        self.image_annotation_pairs = self._load_image_annotation_pairs()
+        self.logger.info(f"Found {len(self.image_annotation_pairs)} image-annotation pairs")
+
+    def __iter__(self):
+        """Return iterator object (self in this case)."""
+        self._current_index = 0  # Reset position when creating new iterator
+        return self
+
+    def __next__(self) -> Tuple[Union[Path, str], Optional[Image], List[BBoxClassId]]:
+        """Get next item from dataset."""
+        if self._current_index >= len(self.image_annotation_pairs):
+            self._current_index = 0  # Reset for next iteration
+            raise StopIteration
+
+        image_path, image, annotations = self._load_item(self._current_index)
+        self._current_index += 1
+        return image_path, image, annotations
+
+    def __len__(self):
+        """Return total number of samples in dataset."""
+        return len(self.image_annotation_pairs)
+    
+    def __getitem__(self, idx: Union[int, slice]) -> Union[
+        Tuple[Union[Path, str], Optional[Image], List[BBoxClassId]],
+        List[Tuple[Union[Path, str], Optional[Image], List[BBoxClassId]]]
+    ]:
+        """Get item(s) by index.
+        
+        Args:
+            idx: Integer index or slice object
+            
+        Returns:
+            Single (image_path, image, annotations) tuple or list of tuples if slice
+            
+        Raises:
+            IndexError: If index out of range
+        """
+        if isinstance(idx, slice):
+            # Handle slice
+            indices = range(*idx.indices(len(self)))
+            return [self._load_item(i) for i in indices]
+        else:
+            # Handle single index
+            return self._load_item(idx)
+
+    def _load_item(self, idx: int) -> Tuple[Union[Path, str], Optional[Image], List[BBoxClassId]]:
+        """Load single item by index.
+        
+        Args:
+            idx: Index of the item to load
+            
+        Returns:
+            Tuple of (image_path, image, annotations)
+            
+        Raises:
+            IndexError: If index out of range
+        """
+        if idx < 0:
+            idx += len(self)
+        if not 0 <= idx < len(self):
+            raise IndexError("Index out of range")
+            
+        image_path, annotation_path = self.image_annotation_pairs[idx]
+        
+        if self.download_file and self.downloaded_files < self.max_files:
+            with tempfile.TemporaryDirectory() as tmpdirname:
+                print('created temporary directory', tmpdirname)
+                
+                try:
+                    self.s3_client.download_file(
+                        image_path,
+                        tmpdirname
+                    )
+                    self.logger.info(f"Downloaded {image_path} to {tmpdirname}")
+                    self.downloaded_files += 1
+                except ClientError as e:
+                    self.logger.error(f"Failed to download {image_path} from S3: {str(e)}")
+                    image = None
+                    raise
+                image = self.load_image(os.path.join(tmpdirname, os.path.basename(image_path)), self.color_mode)     
+        else:
+            image = None
+        with tempfile.TemporaryDirectory() as tmpdirname:
+            print('created temporary directory', tmpdirname)
+            try:
+                self.s3_client.download_file(
+                    annotation_path,
+                    tmpdirname
+                )
+                self.logger.info(f"Downloaded {annotation_path} to {tmpdirname}")
+                annotation_path = os.path.join(tmpdirname, os.path.basename(annotation_path))
+            except ClientError as e:
+                self.logger.error(f"Failed to download {annotation_path} from S3: {str(e)}")
+                raise
+            temp_annotation_path = os.path.join(tmpdirname, os.path.basename(annotation_path))
+            annotations = read_annotation(temp_annotation_path)
+        image_path = os.path.join("s3://", self.s3_client._bucket_name, image_path)
+        return image_path, image, annotations
+
+    def split(self, ratio):
+        """Split dataset into subsets based on given ratio."""
+        raise NotImplementedError("Split method not implemented for Pascal VOC format")
+    
+    @staticmethod
+    def merge(pascalVOC_ld1, pascalVOC_ld2) -> 'PascalVOCLoader':
+        """Merge two Pascal VOC loaders into one.
+        
+        Args:
+            pascalVOC_ld1: First Pascal VOC loader
+            pascalVOC_ld2: Second Pascal VOC loader
+            """
+        raise NotImplementedError("Merge method not implemented for Pascal VOC format")
+
+    def _load_image_annotation_pairs(self) -> List[Tuple[str, str]]:
+        """
+        Load pairs from images and annotations directories.
+        
+        Returns:
+            List of tuples containing (image_path, annotation_path) pairs
+        """
+        image_annotation_pairs = []
+        skipped_images = 0
+        
+        # List files by date if start_date and end_date are provided
+        image_list = self.s3_client.ls(str(self.images_dir), ['*.jpg', '*.jpeg', '*.png'], only_basename=True)
+        annotation_list = self.s3_client.ls(str(self.annotations_dir), ['*.xml'], only_basename=True)
+        
+        for image_file in image_list:
+            common_name = image_file.split(".")[0]
+            annotation_name = f"{common_name}.xml"
+            if annotation_name in annotation_list:
+                self.logger.info(f"Found annotation for {image_file}: {annotation_name}")
+                image_path = str(self.images_dir / image_file)
+                annotation_path = str(self.annotations_dir / annotation_name)
+                image_annotation_pairs.append((image_path, annotation_path))
+            else:
+                self.logger.warning(f"Annotation not found for {image_file}")
+                skipped_images += 1
+                continue
         
         if skipped_images > 0:
             self.logger.warning(f"Skipped {skipped_images} images due to missing annotations")
@@ -252,10 +441,10 @@ def is_pascal_voc_dataset(root_dir: Union[str, Path]) -> bool:
     return False
 
 
-def get_dataset_paths(root_dir: str) -> Tuple[
-    Optional[str], Optional[str], 
-    Optional[str], Optional[str], 
-    Optional[str], Optional[str]
+def get_dataset_paths(root_dir: Union[str, Path]) -> Tuple[
+    Optional[Union[str, Path]], Optional[Union[str, Path]], 
+    Optional[Union[str, Path]], Optional[Union[str, Path]], 
+    Optional[Union[str, Path]], Optional[Union[str, Path]]
 ]:
     """Get directory paths for dataset in Pascal VOC format.
 
@@ -339,39 +528,44 @@ def validate_dataset_structure(root_dir: str) -> Dict[str, Dict[str, Union[int, 
 
 
 def read_annotation(annotation_file: str) -> List[BBoxClassId]:
-    """Parse Pascal VOC format annotations from an XML file.
-
-    Args:
-        annotation_file (str): Path to the Pascal VOC annotation file
-
-    Returns:
-        List of dictionaries containing object annotations:
-            - class_name: Name of the object class
-            - bbox: Tuple of (xmin, ymin, xmax, ymax)
-    """
+    """Parse Pascal VOC format annotations from an XML file."""
     tree = ET.parse(annotation_file)
     root = tree.getroot()
-    
-    width = int(root.find('size/width').text)
-    height = int(root.find('size/height').text)
+
+    # Helper function to safely get text content
+    def get_text(element, path: str) -> Optional[str]:
+        elem = element.find(path)
+        return elem.text if elem is not None else None
+
+    # Helper function to safely get int value
+    def get_int(element, path: str) -> Optional[int]:
+        text = get_text(element, path)
+        return int(text) if text is not None else None
+
+    width = get_int(root, 'size/width')
+    height = get_int(root, 'size/height')
 
     annotations = []
     for obj in root.findall('object'):
-        class_name = obj.find('name').text
+        class_name = get_text(obj, 'name')
         bbox = obj.find('bndbox')
-        xmin = int(bbox.find('xmin').text)
-        ymin = int(bbox.find('ymin').text)
-        xmax = int(bbox.find('xmax').text)
-        ymax = int(bbox.find('ymax').text)
-        annotations.append(BBoxClassId(
-            coordinates=(xmin, ymin, xmax, ymax),
-            class_name=class_name,
-            # Pascal VOC don't have class IDs
-            class_id=None,
-            img_height=height,
-            img_width=width,
-            fmt=BBoxFormat.CORNERS_ABSOLUTE
-        ))
+        
+        if bbox is not None:
+            xmin = get_int(bbox, 'xmin')
+            ymin = get_int(bbox, 'ymin')
+            xmax = get_int(bbox, 'xmax')
+            ymax = get_int(bbox, 'ymax')
+            
+            # Skip objects with incomplete bbox data
+            if all(coord is not None for coord in [xmin, ymin, xmax, ymax]):
+                annotations.append(BBoxClassId(
+                    coordinates=(xmin, ymin, xmax, ymax),
+                    class_name=class_name or "unknown",
+                    class_id=None,
+                    img_height=height,
+                    img_width=width,
+                    fmt=BBoxFormat.CORNERS_ABSOLUTE
+                ))
 
     return annotations
 

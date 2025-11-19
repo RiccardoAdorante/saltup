@@ -4,7 +4,7 @@ import boto3
 import configparser
 import re
 from datetime import datetime, time
-from typing import Union, Iterable, List
+from typing import Union, Iterable, List, Optional
 
 from saltup.utils.misc import match_patterns
 
@@ -17,8 +17,8 @@ class S3:
     def __init__(
         self, 
         bucket_name:str , 
-        aws_access_key_id:str =None, 
-        aws_secret_access_key:str =None, 
+        aws_access_key_id:Optional[str] =None, 
+        aws_secret_access_key:Optional[str] =None, 
         aws_credential_filepath:str ="~/.aws/credentials", 
         section: str='default'
     ):
@@ -38,7 +38,7 @@ class S3:
                                     from. Defaults to 'default'.
         """
         self._aws_access_key_id, self._aws_secret_access_key = self._get_aws_credentials(
-            aws_access_key_id, aws_secret_access_key, aws_credential_filepath, section
+            str(aws_access_key_id), str(aws_secret_access_key), str(aws_credential_filepath), str(section)
         )
         self._bucket_name = bucket_name
 
@@ -124,6 +124,7 @@ class S3:
         """
         Returns the AWS credentials.
         """
+        return self._aws_access_key_id, self._aws_secret_access_key
 
     def download_file(
         self, 
@@ -146,7 +147,7 @@ class S3:
         """
         file_name = os.path.basename(file_path)
         local_file_path = os.path.join(destination_path, file_name)
-
+        
         # Check if the file already exists and overwrite is False
         if os.path.exists(local_file_path) and not overwrite:
             logging.debug(f"File '{local_file_path}' already exists. Skipping download.")
@@ -166,12 +167,14 @@ class S3:
                 if attempt == retries - 1:
                     logging.error(f"Failed to download file '{file_path}' after {retries} attempts.")
                     return False
-
+        return False
+    
     def download_files_from_folder(
         self, 
         folder_path: str, 
-        destination_path: str, 
-        patterns: Union[str, Iterable[Union[str, List[str]]]] = None, 
+        destination_path: str,
+        max_files: int = -1,
+        patterns: Optional[Union[str, Iterable[Union[str, List[str]]]]] = None,
         overwrite: bool = True, 
         retries: int = 3
     ):
@@ -181,11 +184,13 @@ class S3:
         Args:
             folder_path (str): The S3 folder path to download files from.
             destination_path (str): The local path to save downloaded files.
+            max_files (int): Maximum number of files to download. If -1, downloads all files. Defaults to -1.
             patterns: Unix-like patterns to filter the files. Defaults to None. 
-                Uses the `saltup.utils.misc.match_patterns()` function to allow for more pattern possibilities.
-            retries (int): Number of retry attempts in case of failure. Defaults to 3.
+            Uses the `saltup.utils.misc.match_patterns()` function to allow for more pattern possibilities.
             overwrite (bool): If True, overwrites existing files. Defaults to True.
+            retries (int): Number of retry attempts in case of failure. Defaults to 3.
         """
+        files_downloaded = 0
         paginator = self._client.get_paginator('list_objects_v2')
         pages = paginator.paginate(Bucket=self._bucket_name, Prefix=folder_path)
 
@@ -194,19 +199,24 @@ class S3:
 
         for page in pages:
             for obj in page.get('Contents', []):
+                if max_files != -1 and files_downloaded >= max_files:
+                    return  # Stop if max_files reached
+
                 file = obj['Key']
                 filename = os.path.basename(file)
                 
                 # Check if the file matches the filter patterns
                 if (not patterns) or match_patterns(filename, patterns):
-                    if not self.download_file(file, destination_path, overwrite=overwrite, retries=retries):
+                    if self.download_file(file, destination_path, overwrite=overwrite, retries=retries):
+                        files_downloaded += 1
+                    else:
                         logging.warning(f"Failed to download {obj['Key']}.")
 
     def download_folder(
         self, 
         s3_folder: str, 
         local_dir: str, 
-        patterns: Union[str, Iterable[Union[str, List[str]]]] = None, 
+        patterns: Optional[Union[str, Iterable[Union[str, List[str]]]]] = None, 
         overwrite: bool = True, 
         retries: int = 3
     ):
@@ -255,7 +265,7 @@ class S3:
     def ls(
         self, 
         s3_folder: str = './', 
-        patterns: Union[str, Iterable[Union[str, List[str]]]] = None, 
+        patterns: Optional[Union[str, Iterable[Union[str, List[str]]]]] = None, 
         only_basename: bool = True
     ):
         """
@@ -323,9 +333,9 @@ class S3:
 def list_files_by_date(
     s3_instance,
     s3_folder: str = './',
-    start_date: Union[str, datetime] = None,
-    end_date: Union[str, datetime] = None,
-    patterns: Union[str, Iterable[Union[str, List[str]]]] = None,
+    start_date: Optional[Union[str, datetime]] = None,
+    end_date: Optional[Union[str, datetime]] = None,
+    patterns: Optional[Union[str, Iterable[Union[str, List[str]]]]] = None,
     only_basename: bool = True
 ) -> List[str]:
     """
@@ -402,9 +412,9 @@ def list_files_by_date(
 def list_files_by_time(
     s3_instance,
     s3_folder: str = './',
-    start_time: Union[str, time] = None,
-    end_time: Union[str, time] = None,
-    patterns: Union[str, Iterable[Union[str, List[str]]]] = None,
+    start_time: Optional[Union[str, time]] = None,
+    end_time: Optional[Union[str, time]] = None,
+    patterns: Optional[Union[str, Iterable[Union[str, List[str]]]]] = None,
     only_basename: bool = True
 ) -> List[str]:
     """

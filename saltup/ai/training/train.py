@@ -384,6 +384,7 @@ def training(
                 golden_model.export(onnx_model_path, format="onnx")
                 results_dict['models_paths'].append(onnx_model_path)
             
+            golden_model = keras.models.load_model(golden_model_path, compile=False)
             torch_model = convert(onnx_model_path)
             torch_model.input_shape = golden_model.input_shape
             torch_model.output_shape = golden_model.output_shape
@@ -467,7 +468,7 @@ def training(
                 model.export(onnx_model_path, format="onnx")
                 results_dict['models_paths'].append(onnx_model_path)
             
-            
+            model = keras.models.load_model(model_path, compile=False)
             torch_model = convert(onnx_model_path)
             torch_model.input_shape = model.input_shape
             torch_model.output_shape = model.output_shape

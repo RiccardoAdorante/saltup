@@ -1,5 +1,5 @@
 from abc import ABC, abstractmethod
-from typing import Tuple, List
+from typing import Optional, Tuple, List, Any, Callable
 import albumentations as A
 import numpy as np
 
@@ -13,9 +13,9 @@ class BaseDatagenerator(ABC):
         target_size: Tuple[int, int], 
         num_classes: int,
         batch_size: int = 1,
-        preprocess: callable = None,
-        transform: A.Compose = None,
-        seed: int = None
+        preprocess: Optional[Callable[[Any], Any]] = None,
+        transform: Optional[A.Compose] = None,
+        seed: Optional[int] = None
     ):
         """
         Initialize the dataloader.
