@@ -42,6 +42,7 @@ nbformat
 
 # Cloud and storage
 boto3
+moto[s3]
 
 # MQTT client
 paho-mqtt
