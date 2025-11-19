@@ -32,8 +32,10 @@ def test_convert_keras_to_onnx_and_verify(tmp_path):
     assert os.path.exists(onnx_model_path)
     assert onnx_model_path.endswith(".onnx")
 
-    # Verify the ONNX model against the Keras model
-    stats, keras_pred, onnx_pred = verify_onnx_model(onnx_model_path, keras_model_path)
+    # Verify the ONNX model against the Keras model using CPU provider to avoid GPU issues
+    stats, keras_pred, onnx_pred = verify_onnx_model(
+        onnx_model_path, keras_model_path, providers=['CPUExecutionProvider']
+    )
 
     # Assertions for predictions
     assert keras_pred.shape == onnx_pred.shape

@@ -74,7 +74,8 @@ def verify_onnx_model(
     test_input: np.ndarray = None,
     rtol: float = 1e-5,
     atol: float = 1e-5,
-    verbose: bool = True
+    verbose: bool = True,
+    providers: list[str] = None
 ) -> tuple[dict, np.ndarray, np.ndarray]:
     """
     Verify that the ONNX model produces outputs close to the original Keras model.
@@ -86,6 +87,7 @@ def verify_onnx_model(
         rtol: Relative tolerance for comparison.
         atol: Absolute tolerance for comparison.
         verbose: If True, prints verification status and stats.
+        providers: List of execution providers to use. If None, uses all available providers.
 
     Returns:
         Tuple of (stats_dict, keras_pred, onnx_pred)
@@ -94,7 +96,8 @@ def verify_onnx_model(
     keras_model: keras.Model = keras.models.load_model(keras_model_path, compile=False)
 
     # Create ONNX session
-    providers = ort.get_available_providers()
+    if providers is None:
+        providers = ort.get_available_providers()
     session = ort.InferenceSession(onnx_path, providers=providers)
 
     # Prepare test input
