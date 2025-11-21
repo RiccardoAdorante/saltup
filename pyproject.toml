@@ -30,7 +30,6 @@ dependencies = [
     
     # Cloud & Utilities
     "boto3",           # S3 access
-    "moto[s3]",
     "tqdm",            # Progress bars
     "toml",
     "dotmap",
@@ -74,7 +73,10 @@ full = [
     "ipykernel",
     "nbformat",
     "paho-mqtt",
-    "pytest"
+    "pytest",
+
+    # Cloud & Utilities
+    "moto[s3]"
 ]
 
 [project.scripts]
