@@ -5,7 +5,7 @@ from pathlib import Path, PurePosixPath
 import subprocess
 from typing import Callable, Dict, Tuple, Union, List, Optional
 from urllib.parse import urlparse
-from saltup.utils.misc import is_url, extract_suffix_from_url
+from saltup.utils.misc import is_url, extract_extension_from_url
 from saltup.utils.data.image.image_utils import ColorMode, ColorsBGR, Image, ImageFormat
 
 # =============================================================================
@@ -228,7 +228,7 @@ def get_video_properties(video_path: Union[str, Path]) -> tuple[float, int, int,
     # For presigned URLs, the path may be extension-less; in that case,
     # infer extension from response-content-disposition filename query param.
     if _is_url:
-        suffix = extract_suffix_from_url(str(video_path))
+        suffix = extract_extension_from_url(str(video_path))
     else:
         suffix = Path(video_path).suffix.lower()
 

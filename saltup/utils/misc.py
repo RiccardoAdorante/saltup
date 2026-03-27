@@ -18,7 +18,7 @@ def is_url(path: Union[str, Path]) -> bool:
     return isinstance(path, str) and urlparse(path).scheme in ('http', 'https')
 
 
-def extract_suffix_from_url(video_path: str) -> str:
+def extract_extension_from_url(path: str) -> str:
     """
     Attempt to determine the file extension from a presigned URL.
     Priority:
@@ -28,7 +28,7 @@ def extract_suffix_from_url(video_path: str) -> str:
       4. response-content-type query param  ← new fallback
     Returns a lowercase suffix like '.mp4', or '' if nothing found.
     """
-    parsed = urlparse(video_path)
+    parsed = urlparse(path)
 
     # 1. Try the URL path directly
     suffix = PurePosixPath(parsed.path).suffix.lower()
@@ -36,7 +36,7 @@ def extract_suffix_from_url(video_path: str) -> str:
         return suffix
 
     # 2. mimetypes guess on the full URL (works when path has a clean extension before '?')
-    guessed_type, _ = mimetypes.guess_type(video_path)
+    guessed_type, _ = mimetypes.guess_type(path)
     if guessed_type:
         ext = mimetypes.guess_extension(guessed_type)
         if ext:
